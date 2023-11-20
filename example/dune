@@ -1,0 +1,7 @@
+(include_subdirs unqualified)
+ 
+(executable
+  (name example)
+  (modules example init absMemory absValue)
+  (libraries calli))
+

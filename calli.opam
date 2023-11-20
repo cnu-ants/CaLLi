@@ -1,0 +1,16 @@
+opam-version: "2.0"
+name: "calli"
+version: "0.1"
+synopsis: "CaLLi : OCaml Library for Static Analysis of LLVM bitcode"
+maintainer: ["Soyeon Baek <sy.baek28@gmail.com>"]
+authors: ["Soyeon Baek <sy.baek28@gmail.com>"]
+license: "MIT"
+build: [
+  ["dune" "build" "-p" name]
+]
+depends: [
+  "ocaml"
+  "dune"
+  "llvm" 
+  "containers"
+]
