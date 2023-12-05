@@ -42,6 +42,8 @@ let get_type e =
   match n with
   | "i32" -> Type.Integer {bitwidth=32}
   | "i1" -> Type.Integer {bitwidth=1}
+  | "float" -> Type.Float 
+  | "double" -> Type.Double
   | _ -> failwith "type error"
 
 let get_int e : Z.t = 
@@ -62,3 +64,6 @@ let get_fname func =
   
 let get_fname_from_bb str =
   Str.global_replace (Str.regexp "[\r\n\t ]") "" (List.hd (String.split_on_char '#' str))
+
+let is_global str = 
+  String.starts_with ~prefix:"@" str

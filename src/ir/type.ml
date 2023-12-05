@@ -6,6 +6,7 @@ type t = Integer of {bitwidth:int}
         (* | Structure of {ty:t list} *)
         | Label
         | Void
+        | Double
         | Undef
 
 let rec get_bitwidth ty =
@@ -32,5 +33,6 @@ let rec pp ppf (ty : t) =
   | Array {size; ty} -> Format.fprintf ppf "[%d x %a]" size pp ty
   | Label -> Format.fprintf ppf "label"
   | Void -> Format.fprintf ppf "void"
+  | Double -> Format.fprintf ppf "double"
   | Undef -> Format.fprintf ppf "undef"
 

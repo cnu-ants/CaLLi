@@ -3,13 +3,12 @@
 
 let rec pp_term_list ppf term_list = 
   match term_list with
-  | hd :: tl -> let _ = Format.fprintf ppf "%a" Term.pp hd in pp_term_list ppf tl
+  | _ :: tl -> pp_term_list ppf tl
   | [] -> Format.fprintf ppf "empty"
 
 let rec pp_stmt_list ppf term_list = 
   match term_list with
-  | hd :: tl -> let count = List.length hd in let first : Stmt.t = (List.hd hd) in 
-                let _ = Format.fprintf ppf "%d %a, " count Inst.pp first.inst in pp_stmt_list ppf tl
+  | _ :: tl -> pp_stmt_list ppf tl
   | [] -> Format.fprintf ppf "empty"
 
 
@@ -39,7 +38,6 @@ let split (bb : Basicblock.t) (st_list : st list) : string list =
         let new_name = if i = 0 then bb.bb_name else bb.bb_name^"#"^(string_of_int i) in
         let new_bb : Basicblock.t = {func_name=bb.func_name; bb_name = new_name; stmts = lst; term = term; loc=bb.loc} in
         let _ = Bbpool.pool := (Bbpool.add new_name new_bb !Bbpool.pool) in
-        let _ = Format.printf "%a\n\n" Basicblock.pp new_bb in
         (name_list@[new_name], [], i+1)
     )
     ([], [], 0)

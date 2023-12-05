@@ -29,9 +29,14 @@ module Make (AbsMem : AbstractMemory.S ) ( Ctxt : Context.S with type memty = Ab
           match bb.term with
           | CallSite {callee; _} ->
             let f = Module.find bb.func_name m in
-            let icfg = add bb_name ((callee^"#entry")::(M.find bb_name f.cfg)) icfg in
+            let icfg = 
+              if Bbpool.mem (callee^"#entry") !Bbpool.pool then
+                add bb_name ((callee^"#entry")::(M.find bb_name f.cfg)) icfg
+              else icfg in
             let next = List.nth (Cfg.next bb f.cfg) 0 in
-            add (callee^"#exit") (next.bb_name::(M.find (callee^"#exit") icfg)) icfg
+            if Bbpool.mem (callee^"#exit") !Bbpool.pool then
+              add (callee^"#exit") (next.bb_name::(M.find (callee^"#exit") icfg)) icfg
+            else icfg 
           | _ -> icfg
         )
         icfg icfg 
@@ -61,6 +66,10 @@ module Make (AbsMem : AbstractMemory.S ) ( Ctxt : Context.S with type memty = Ab
 
 
     let next (bb : Basicblock.t) (ctxt : Ctxt.t) (mem : AbsMem.t) icfg m : (Basicblock.t * Ctxt.t) list =
+      (* let bb_list = M.find bb.bb_name icfg |> 
+        List.map (fun b -> Bbpool.find b !Bbpool.pool)
+        in
+      Ctxt.apply bb bb_list ctxt mem *)
       let bb_list = M.find bb.bb_name icfg |> List.map (fun b -> Bbpool.find b !Bbpool.pool) in
       let next_bb_list = match bb.term with
       | CallSite _ ->
@@ -70,8 +79,13 @@ module Make (AbsMem : AbstractMemory.S ) ( Ctxt : Context.S with type memty = Ab
         bb_list
       | _ -> bb_list
       in
-      (* List.map (fun bb -> (bb, ctxt)) next_bb_list *)
-      Ctxt.apply bb next_bb_list ctxt mem
+      if next_bb_list != [] then
+        Ctxt.apply bb next_bb_list ctxt mem
+      else 
+        let fallbacks = next_fallback bb m in
+        List.map
+        (fun v -> (v, ctxt))
+        fallbacks
 
     let pp _ icfg = 
       M.iter

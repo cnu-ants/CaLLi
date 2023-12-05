@@ -5,6 +5,7 @@ let find = M.find
 let add = M.add
 let iter = M.iter
 let fold = M.fold
+let mem = M.mem
 
 let pool = ref empty
 

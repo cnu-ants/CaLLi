@@ -2,13 +2,13 @@ module F = Format
 
 (** 
   Functor building an implementation of the Analyzer
-given abstractvalue, abstract memory, analysis context, abstract states, tf.
+given abstract domain, abstract memory, analysis context, abstract states, abstract semantics.
  *)
 module Make 
-(AbsVal : AbstractValue.S)
+(AbsVal : AbstractDomain.S)
 (AbsMem : AbstractMemory.S with type valty = AbsVal.t) (Ctxt : Context.S with type memty = AbsMem.t) 
 (States : States.S with type ctxtty = Ctxt.t and type memty = AbsMem.t) 
-(TF : TransferFunction.S with type memty = AbsMem.t) 
+(TF : AbstractSemantics.S with type memty = AbsMem.t) 
 =
   struct
   
@@ -114,7 +114,7 @@ module Make
         let (bb, ctxt) = bb_ctxt in
         let mem' = TF.transfer bb mem in
         let _ = summary := States.update bb_ctxt mem' !summary in
-        let next = Icfg.next_intra bb ctxt mem' !icfg !llmodule in
+        let next = Icfg.next bb ctxt mem' !icfg !llmodule in
         let res = List.map (fun bb_ctxt -> (bb_ctxt, mem')) next in
         let wl'', states' = update res wl' states in
         analyze' wl'' states'

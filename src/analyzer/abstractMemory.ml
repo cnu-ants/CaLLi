@@ -33,7 +33,7 @@ basicblock name, the index of the instruction, and an random number for
 uniqueness in memory addresses.
 
  *)
-module Make(AbsVal : AbstractValue.S) : (S with type valty = AbsVal.t) = 
+module Make(AbsVal : AbstractDomain.S) : (S with type valty = AbsVal.t) = 
   struct
     
     type key = string * int * int

@@ -10,8 +10,16 @@
   let iter = M.iter
 
   let main m = 
-    match M.find_first_opt (fun key -> String.starts_with ~prefix:"main" key) m with
-    | Some (_,f) -> f
+    let t = 
+      M.fold (fun _ v t -> 
+      let f : Function.t = v in
+      if String.starts_with ~prefix:"main" f.function_name 
+        then Some (v) 
+        else t
+      ) m None 
+    in
+    match t with
+    | Some (f) -> f
     | None -> failwith "No main function exists"
   
   let next (bb_name : String.t) m : Basicblock.t list = 

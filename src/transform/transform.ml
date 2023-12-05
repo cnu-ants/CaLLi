@@ -83,8 +83,8 @@ let rec transform_e e func_name : Expr.t =
       can be used to zero initialize a value to zero of any type,
       including scalar and aggregate types 
       but not only for a vector type *)
-    | Llvm.ValueKind.ConstantAggregateZero -> 
-      let element_ty = transform_lltype (Llvm.element_type lltype) in
+    | Llvm.ValueKind.ConstantAggregateZero -> Expr.Undef
+      (* let element_ty = transform_lltype (Llvm.element_type lltype) in
       let size = Llvm.vector_size lltype in
       let vector = 
         List.init 
@@ -93,11 +93,11 @@ let rec transform_e e func_name : Expr.t =
           (match element_ty with
           | Integer _ -> Expr.ConstInt {ty=element_ty; value= Z.of_int 0}
           | Float -> Expr.ConstFP {ty=element_ty; value=0.}
-          | _ -> failwith "UB"
+          | _ -> Expr.ConstInt {ty=element_ty; value= Z.of_int 0}
           )
         )
       in
-      Expr.Vector {ty=ty; value=vector}
+      Expr.Vector {ty=ty; value=vector} *)
     | Llvm.ValueKind.ConstantArray
     | Llvm.ValueKind.ConstantDataArray ->
       let element_ty = transform_lltype (Llvm.element_type lltype) in
@@ -191,11 +191,15 @@ let transform_instr instr func_name: Inst.t list =
                         {name=func_name^(get_name instr);
                         ty=transform_expr_type instr}]
   | Llvm.Opcode.Store   ->
+                        let n = 
+                          if Util.is_global (get_name (Llvm.operand instr 1)) 
+                          then (get_name (Llvm.operand instr 1))
+                          else func_name^(get_name (Llvm.operand instr 1)) 
+                        in
                         [Inst.Store 
                         {operand=(transform_e (Llvm.operand instr 0) func_name); 
-                        name=func_name^(get_name (Llvm.operand instr 1));
+                        name=n;
                         ty = transform_expr_type (Llvm.operand instr 1)}]
-                        (* (transform_e (Llvm.operand instr 1) func_name)} *)
   | Llvm.Opcode.Load    -> [Inst.Load 
                         {name=(func_name^(get_name instr)); 
                         operand=(transform_e (Llvm.operand instr 0) func_name);
@@ -265,7 +269,7 @@ let transform_term term func_name bb_name: Term.t =
     succ=List.init (((Llvm.num_operands term) - 2) / 2) 
       (fun n -> (transform_e (Llvm.operand term ((n+1)*2)) func_name, (transform_e (Llvm.operand term ((n+1)*2+1)) func_name;)))
     }
-  | _ -> let _  = Format.printf "other terms" in Other
+  | _ -> Term.Other
 
 
 let transform_bb llbb func_name : Basicblock.t =
@@ -371,7 +375,8 @@ let transform_module llm : Module.t =
   let glist = 
     Llvm.fold_left_globals
     (fun glist v -> 
-      let var : Global.t = 
+          let var : Global.t = 
+
         {name=get_name v; ty=transform_expr_type v; value=transform_e (Llvm.operand v 0) ""} in
       glist@[var])
     []
@@ -379,7 +384,7 @@ let transform_module llm : Module.t =
   in
   let function_map = 
     Llvm.fold_left_functions
-    (fun (func_map) func ->
+    (fun (func_map) func -> 
       let f = transform_func func in 
       Module.M.add (f.function_name) f func_map
     )

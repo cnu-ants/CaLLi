@@ -4,13 +4,5 @@
   (name calli)
   (public_name calli)
   (modules :standard \)
-;  (modules abstractMemory abstractValue callGraph callSiteContext context
-;           env icfg llvmAnalyzer states summary transferFunction val 
-;           worklist transform transform2 transform3 transform_meta
-;           transform_select util pp to_dot dot ast absMemory absValue libtest)
   (libraries str llvm llvm.bitreader containers zarith))
 
-;(executable
-;  (name libtest)
-;  ;;(modes (native shared_obdject))
-;  (libraries llvm str zarith llvm.bitreader containers))

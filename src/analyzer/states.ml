@@ -20,6 +20,7 @@ module type S =
     val update : Basicblock.t * ctxtty -> memty -> t ->t 
     val pp_ctxtMem : Format.formatter -> memty CtxtM.t -> unit
     val pp : Format.formatter -> t -> unit
+    val iter : (Basicblock.t -> memty CtxtM.t -> unit) -> t -> unit
 
   end
   
@@ -46,6 +47,7 @@ module Make (Ctxt : Context.S) (AbsMem : AbstractMemory.S) : (S with type ctxtty
     let find = M.find 
     let mem' = M.mem
     let empty = M.empty
+    let iter = M.iter
 
     let mem (bb_ctxt : Basicblock.t * Ctxt.t) s =
       let (bb, ctxt) = bb_ctxt in
