@@ -21,7 +21,7 @@
 
 ## Usage
 
-Read our [Getting Started](https://github.com/SoyeonBaek/calli/blob/main/example/README.md) page for details.
+Read our [Getting Started](https://github.com/cnu-ants/CaLLi/blob/main/example/README.md) page for details.
 
 
 ## License
