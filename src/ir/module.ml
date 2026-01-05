@@ -4,7 +4,7 @@
   
   let empty = M.empty
 
-  let find s m : Function.t = M.find s m
+  (*let find s m : Function.t = M.find s m*)
   let add = M.add
   let fold = M.fold
   let iter = M.iter
@@ -21,7 +21,21 @@
     match t with
     | Some (f) -> f
     | None -> failwith "No main function exists"
-  
+ 
+  let find s m = 
+    let t = 
+      M.fold (fun _ v t -> 
+      let f : Function.t = v in
+      if String.starts_with ~prefix:s f.function_name 
+        then Some (v) 
+        else t
+      ) m None 
+    in
+    match t with
+    | Some (f) -> f
+    | None -> failwith "No target function exists"
+
+
   let next (bb_name : String.t) m : Basicblock.t list = 
     let bb = Bbpool.find_bb bb_name in
     let func = bb.func_name in

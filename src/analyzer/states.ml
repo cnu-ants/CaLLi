@@ -17,6 +17,7 @@ module type S =
     val mem : Basicblock.t * ctxtty -> t -> bool
     (* val find : KeyType.t -> t ->  *)
     val find_mem :  Basicblock.t * ctxtty -> t -> memty
+    val find_mem_option :  Basicblock.t * ctxtty -> t -> memty option
     val update : Basicblock.t * ctxtty -> memty -> t ->t 
     val pp_ctxtMem : Format.formatter -> memty CtxtM.t -> unit
     val pp : Format.formatter -> t -> unit
@@ -63,7 +64,10 @@ module Make (Ctxt : Context.S) (AbsMem : AbstractMemory.S) : (S with type ctxtty
     let find_mem (bb_ctxt : Basicblock.t * Ctxt.t) s = 
       let (bb, ctxt) = bb_ctxt in 
       try CtxtM.find ctxt (M.find bb s) with Not_found -> raise No_state
-    
+
+    let find_mem_option (bb, ctxt) s = 
+      try CtxtM.find_opt ctxt (M.find bb s) with Not_found -> None
+
     let update (bb_ctxt : Basicblock.t * Ctxt.t) m s =
       let (bb, ctxt) = bb_ctxt in
       if M.mem bb s 
@@ -88,9 +92,20 @@ module Make (Ctxt : Context.S) (AbsMem : AbstractMemory.S) : (S with type ctxtty
       F.fprintf fmt "[%a]" (F.pp_print_list
       ~pp_sep:(fun fmt () -> F.fprintf fmt "")
       (fun fmt ((ctxt : Ctxt.t), m) ->
-        F.fprintf fmt "%a ↦\n%a\n" Ctxt.pp ctxt AbsMem.pp m))
+        (* F.fprintf fmt "%a ↦\n" Ctxt.pp ctxt)) *)
+          F.fprintf fmt "%a ↦\n%a\n" Ctxt.pp ctxt AbsMem.pp m
+        ))
       (CtxtM.bindings m)
 
+(*
+    let pp_ctxtMem fmt m =
+      F.fprintf fmt "[%a]" 
+      (F.pp_print_list
+      ~pp_sep:(fun fmt () -> F.fprintf fmt "")
+      (fun fmt ((ctxt : Ctxt.t), _) ->
+        F.fprintf fmt "%a\n" Ctxt.pp ctxt))
+      (CtxtM.bindings m)
+*)
     let pp fmt (s : t) = 
       F.fprintf fmt "%a" (F.pp_print_list 
         ~pp_sep:(fun fmt () -> F.fprintf fmt "\n\n")

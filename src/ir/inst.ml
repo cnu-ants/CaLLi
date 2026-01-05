@@ -5,6 +5,8 @@ type t = BinaryOp of {name:string; op:Op.t; operand0:Expr.t; operand1:Expr.t; ty
             | Alloc of {name:string; ty:Type.t} 
             | Store of {operand:Expr.t; name:string; ty:Type.t}
             | Load of {name:string; operand:Expr.t; ty:Type.t}
+            | PtrToInt of {name:string; operand:Expr.t; ty:Type.t}
+            | IntToPtr of {name:string; operand:Expr.t; ty:Type.t}
             | ICmp of {name:string; cond:Cond.t; operand0:Expr.t; operand1:Expr.t; ty:Type.t}
             | Select of {name:string; cond:Expr.t; operand0:Expr.t; operand1:Expr.t; ty:Type.t}
             | ReturnSite of {name:string; ty:Type.t}
@@ -15,6 +17,7 @@ type t = BinaryOp of {name:string; op:Op.t; operand0:Expr.t; operand1:Expr.t; ty
             | Zext of {name:string; operand:Expr.t; ty:Type.t}
             | Prune of {cond:string; value:Expr.t}
             | NPrune of {cond:string; value:Expr.t list}
+            | Trunc of {name:string; operand:Expr.t; ty:Type.t}
             | Other
 
 let pp ppf (inst:t) =
@@ -27,6 +30,10 @@ let pp ppf (inst:t) =
       Format.fprintf ppf "store %a %a %s" Expr.pp operand Type.pp ty name
   | Load {name; operand; _;} -> 
       Format.fprintf ppf "%s = load %a" name Expr.pp operand
+  | PtrToInt {name; operand; ty;} -> 
+      Format.fprintf ppf "%s = ptrtoint %a to %a" name Expr.pp operand Type.pp ty
+  | IntToPtr {name; operand; ty;} -> 
+      Format.fprintf ppf "%s = inttoptr %a to %a" name Expr.pp operand Type.pp ty
   | ICmp {name; cond; operand0; operand1; _;} -> 
       Format.fprintf ppf "%s = icmp %a %a %a" name Cond.pp cond Expr.pp operand0 Expr.pp operand1
   | Select {name; cond; operand0; operand1; _;} ->  
@@ -50,5 +57,7 @@ let pp ppf (inst:t) =
       Format.fprintf ppf "!prune %s %a" cond 
       (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt ", ")
       (fun fmt a -> Format.fprintf fmt "%a" Expr.pp a)) value
+  | Trunc {name; operand; ty;} -> 
+      Format.fprintf ppf "%s = trunc %a to %a" name Expr.pp operand Type.pp ty
   | Other -> Format.fprintf ppf "Other"
 

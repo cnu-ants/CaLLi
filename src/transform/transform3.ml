@@ -30,7 +30,8 @@ let add_prune_node (f : Function.t) =
           let cfg' = Cfg.add true_prune_bb.bb_name [true_bb.bb_name] cfg' in
           let cfg' = Cfg.add false_prune_bb.bb_name [false_bb.bb_name] cfg' in
           cfg'
-        | _ -> failwith "unreachable") 
+        | _ -> cfg) 
+
       | Switch {cond; succ; default_succ; _;} ->
         let cond_name = (match cond with | Name {name; _;} -> name | _ -> failwith "not a label") in
         let v_list, bb_list = List.split succ in

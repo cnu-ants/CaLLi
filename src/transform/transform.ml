@@ -28,7 +28,7 @@ let transform_cond cond : Cond.t =
 
 
 let rec transform_lltype lltype =
-  match Llvm.classify_type lltype with
+  let res = match Llvm.classify_type lltype with
   | Integer -> 
       let bitwidth = (Llvm.integer_bitwidth lltype) in 
       Type.Integer {bitwidth=bitwidth}
@@ -47,22 +47,25 @@ let rec transform_lltype lltype =
       Type.Array {size=size; ty=element_ty}
   | Void | Half ->  Type.Void
   | _ -> Undef
-
+  in
+  res
 
 let transform_expr_type expr : Type.t = 
   let lltype = Llvm.type_of expr in
-  transform_lltype lltype
+  let res = transform_lltype lltype in 
+  res
 
 
 let rec transform_e e func_name : Expr.t = 
   let lltype = Llvm.type_of e in
   let ty = transform_lltype lltype in
-  if ty = Type.Void then Expr.Void {ty=Type.Void} 
+  let res = if ty = Type.Void then Expr.Void {ty=Type.Void} 
   else
     let str = (Llvm.string_of_llvalue e) in
     match Llvm.classify_value e with
-    | Llvm.ValueKind.ConstantInt -> Expr.ConstInt {ty=ty; value=get_int str}
-    | Llvm.ValueKind.ConstantFP -> Expr.ConstFP {ty=get_type str; value=get_float str}
+    | Llvm.ValueKind.ConstantInt -> 
+      Expr.ConstInt {ty=ty; value=get_int str}
+    (*| Llvm.ValueKind.ConstantFP -> Expr.ConstFP {ty=get_type str; value=get_float str}
     | Llvm.ValueKind.ConstantVector
     | Llvm.ValueKind.ConstantDataVector -> 
       let element_ty = transform_lltype (Llvm.element_type lltype) in
@@ -115,18 +118,20 @@ let rec transform_e e func_name : Expr.t =
             {ty=element_ty; value=float_of_string (Llvm.string_of_llvalue (Llvm.operand e index))}
           | Vector _ -> transform_e (Llvm.operand e index) func_name
           | Array _ -> transform_e (Llvm.operand e index) func_name
-          | _ -> failwith "constant array"
+          | _ -> Undef (*failwith "constant array"*)
         )
       )
       in
-      Expr.Array {ty=ty; value=array}
+      Expr.Array {ty=ty; value=array}*)
     (* | Llvm.ValueKind.ConstantStruct ->  *)
     | Llvm.ValueKind.GlobalVariable -> Expr.Name {ty=ty; name=get_name e}
     | Llvm.ValueKind.BasicBlock -> Expr.Name {ty=ty; name=func_name^"#"^get_bbname e}
     | Llvm.ValueKind.ConstantExpr -> Expr.Undef
     (* failwith (Format.asprintf "constexpr %s"(Llvm.string_of_llvalue e)) *)
     | _ -> Expr.Name {ty=ty; name=func_name^(get_name e)}
-
+    in
+    
+    res
 
 
 let transform_binop op = 
@@ -161,7 +166,7 @@ let rec transform_args instr func_name num_args : Expr.t list =
 
 let transform_instr instr func_name: Inst.t=
   let op = Llvm.instr_opcode instr in 
-  match op with
+  let res = match op with
   (* | Llvm.Opcode.FNeg  *)
   | Llvm.Opcode.Add
   | Llvm.Opcode.FAdd
@@ -216,14 +221,15 @@ let transform_instr instr func_name: Inst.t=
                         operand0=(transform_e (Llvm.operand instr 1) func_name); 
                         operand1=(transform_e (Llvm.operand instr 2) func_name);
                         ty=transform_expr_type (Llvm.operand instr 1)}
-  | Llvm.Opcode.Call -> let args = if (Llvm.num_operands instr) = 1 then [] 
+  | Llvm.Opcode.Call -> 
+  let args = if (Llvm.num_operands instr) = 1 then [] 
                           else (transform_args instr func_name ((Llvm.num_operands instr) -2)) in
                         Inst.Call
                         {name=(func_name^(get_name instr));
                         callee=(get_fname (Llvm.operand instr ((Llvm.num_operands instr) -1)));
                         args=args;
                         ty=transform_expr_type instr}
-  | Llvm.Opcode.GetElementPtr -> 
+  (*| Llvm.Opcode.GetElementPtr -> 
                         let num_index = Llvm.num_operands instr in
                         let index_list = 
                           if num_index = 1 then []
@@ -238,7 +244,7 @@ let transform_instr instr func_name: Inst.t=
                         {name=(func_name^(get_name instr));
                         operand=(transform_e (Llvm.operand instr 0) func_name);
                         ty=transform_expr_type instr;}
-  | Llvm.Opcode.ZExt -> Inst.Zext
+  *)| Llvm.Opcode.ZExt -> Inst.Zext
                         {name=(func_name^(get_name instr));
                         operand=(transform_e (Llvm.operand instr 0) func_name);
                         ty=transform_expr_type instr;}
@@ -246,9 +252,21 @@ let transform_instr instr func_name: Inst.t=
                         {name=(func_name^(get_name instr));
                         operand=(transform_e (Llvm.operand instr 0) func_name);
                         ty=transform_expr_type instr;}
+  | Llvm.Opcode.Trunc -> Inst.Trunc
+                        {name=(func_name^(get_name instr));
+                        operand=(transform_e (Llvm.operand instr 0) func_name);
+                        ty=transform_expr_type instr;}
+  | Llvm.Opcode.PtrToInt -> Inst.PtrToInt
+                            {name=(func_name^(get_name instr));
+                            operand=(transform_e (Llvm.operand instr 0) func_name);
+                            ty=transform_expr_type instr;}
+  | Llvm.Opcode.IntToPtr -> Inst.IntToPtr
+                            {name=(func_name^(get_name instr));
+                            operand=(transform_e (Llvm.operand instr 0) func_name);
+                            ty=transform_expr_type instr;}
   | _ -> Inst.Other
-
-
+  in
+  res
 
 let transform_term term func_name bb_name: Term.t =
   match Llvm.instr_opcode term with
@@ -271,6 +289,8 @@ let transform_term term func_name bb_name: Term.t =
     }
   | _ -> Term.Other
 
+(*supported llvm 14*)
+(*
 let get_location instr : Stmt.Loc.t option = 
   let loc = 
     Array.fold_left
@@ -289,6 +309,10 @@ let get_location instr : Stmt.Loc.t option =
   match loc with
   | None -> None
   | Some (line, col) -> Some {line=line; col=col;}
+*)
+
+let get_location _ : Stmt.Loc.t option = 
+  None
 
 let transform_bb llbb func_name : Basicblock.t =
   let bb_name = func_name^"#"^(get_bbname (Llvm.value_of_block llbb)) in
@@ -375,13 +399,19 @@ let transform_func llf (*: Function.t*) =
   let func_name = get_fname llf in
   let _ = transform_bbpool llf in
   let cfg = transform_cfg llf in
+  let entry_name = 
+    if Array.length (Llvm.basic_blocks llf) = 0 then ""
+    else
+      let entry = Llvm.entry_block llf in
+      func_name^"#"^(get_bbname (Llvm.value_of_block entry)) 
+  in
   let llparams = Llvm.params llf in
   let params = Array.fold_left 
     (fun params' param -> 
       let p = transform_e param func_name in params'@[p]) 
     [] llparams 
   in
-  let func : Function.t = {function_name=func_name; cfg=cfg; params=params; metadata=Empty} in
+  let func : Function.t = {function_name=func_name; cfg=cfg; params=params; metadata=Empty; entry=entry_name} in
   let meta = Transform_meta.make_alias func in
   {func with metadata=meta}
 
@@ -405,6 +435,6 @@ let transform_module llm : Module.t =
     )
     Module.M.empty
     llm
-  in 
+  in
   let llmodule : Module.t = {function_map = function_map; globals=glist} in
   llmodule

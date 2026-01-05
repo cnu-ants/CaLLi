@@ -1,6 +1,6 @@
 (include_subdirs unqualified)
  
 (executable
-  (name test_wto_octagon)
-  (libraries calli apron apron.octMPQ)
+  (name analyzer)
+  (libraries calli)
   (flags (:standard -w -26-40-27-33)))

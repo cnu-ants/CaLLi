@@ -38,7 +38,7 @@ module Make (AbsMem : AbstractMemory.S ) ( Ctxt : Context.S with type memty = Ab
       in
       icfg
 
-    let prev (bb : Basicblock.t) m : Basicblock.t list = 
+    let preds_intra (bb : Basicblock.t) _ m : Basicblock.t list = 
       let f = Module.find bb.func_name m in
       Cfg.fold
       (fun bb_name nexts lst -> 
@@ -56,7 +56,7 @@ module Make (AbsMem : AbstractMemory.S ) ( Ctxt : Context.S with type memty = Ab
     let next_intra (bb : Basicblock.t) (ctxt : Ctxt.t) (mem : AbsMem.t) _ m : (Basicblock.t * Ctxt.t) list =
       let f = Module.find bb.func_name m in
       let cfg = f.cfg in
-      let next_bb_list = Cfg.next bb cfg in 
+      let next_bb_list = Cfg.next bb cfg in
       Ctxt.apply bb next_bb_list ctxt mem
 
 

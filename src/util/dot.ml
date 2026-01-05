@@ -9,12 +9,13 @@ module Shape = struct
 end
 
 module Color = struct
-  type t = White | LightPink | Lavenderblush
+  type t = White | LightPink | Lavenderblush | LightGrey
   let pp fmt (c:t) = 
     match c with
     | White -> Format.fprintf fmt "white"
     | LightPink -> Format.fprintf fmt "lightpink"
     | Lavenderblush -> Format.fprintf fmt "lavenderblush"
+    | LightGrey -> Format.fprintf fmt "\"#f1f3f5\""
 end
 
 module Style = struct

@@ -3,7 +3,7 @@ module F = Format
 (** An interface for the context module for context-sensitive analysis. **)
 
 module type S = sig
-    
+  
   (* type of the context *)
   type t
   

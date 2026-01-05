@@ -7,11 +7,11 @@ let to_string cond =
   | Ugt -> "ugt"
   | Uge -> "uge"
   | Ult -> "ult"
+  | Ule -> "ule"
   | Sgt -> "sgt"
   | Sge -> "sge"
   | Slt -> "slt"
   | Sle -> "sle"
-  | Ule -> "ule"
 
 let pp fmt (cond : t) =
   Format.fprintf fmt "%s" (to_string cond)

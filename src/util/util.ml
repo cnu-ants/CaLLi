@@ -1,5 +1,7 @@
 let get_name lli =
+  try
   Str.global_replace (Str.regexp "[\r\n\t ]") "" (List.hd (String.split_on_char '=' (Llvm.string_of_llvalue lli)))
+  with | _ -> failwith "get_name err"
 
 let get_bbname ?(default="entry") lli =
 match String.split_on_char ':' (Llvm.string_of_llvalue lli) with
@@ -55,15 +57,21 @@ let get_int e : Z.t =
 
 let get_float e = 
   let f = (Str.global_replace (Str.regexp "[\r\n\t ]") "" (List.nth (String.split_on_char ' ' e) 1)) in
-  match f with
+  try 
+  (match f with
   | _ -> float_of_string f
+  ) with _ -> let _ = Format.printf "%s@." f in failwith "util.get_float"
 
 let get_fname func =
-  let ret = Str.global_replace (Str.regexp "[\r\n\t ]") "" (List.hd (List.tl (String.split_on_char '@' (List.hd (String.split_on_char ')' (Llvm.string_of_llvalue func)))))) in
+  try 
+  let ret = Str.global_replace (Str.regexp "[\r\n\t ]") "" (List.hd (String.split_on_char ')' (List.hd (List.tl (String.split_on_char '@' (Llvm.string_of_llvalue func)))))) in
   ret ^ (String.make 1 ')')
-  
+  with | _ -> let _ = Format.printf "%s@." (Llvm.string_of_llvalue func)  in "unknown"
+
 let get_fname_from_bb str =
+  try
   Str.global_replace (Str.regexp "[\r\n\t ]") "" (List.hd (String.split_on_char '#' str))
+  with | _ -> failwith "get fname from bb err"  
 
 let is_global str = 
   String.starts_with ~prefix:"@" str

@@ -31,6 +31,11 @@ let rec cfg_to_dot (cfg : Cfg.t) (bb : Basicblock.t) visit =
   else
     let next_lst = Cfg.next bb cfg in
     let visit = bb::visit in 
+    (* let _ = 
+      Summary.CtxtM.iter
+      (fun ctxt _ -> Format.printf "%a\n" FlaCtxt.pp ctxt)
+      (Summary.find bb !summary)
+    in *)
     let _, visit, lst = 
       List.fold_left 
       (fun (index, visit, lst) (bb':Basicblock.t)-> 
@@ -46,16 +51,13 @@ let func_to_dot (f : Function.t) : Dot.DIGraph.t =
   (* let _ = Bbpool.iter (fun k _ -> Format.printf "fname : %s\n" k) !Bbpool.pool in *)
   let oc = open_out (f.function_name^".dot") in
   (* let _ = Format.printf "find : %s\n" (f.function_name^"#entry") in *)
-  let _, stmts = cfg_to_dot f.cfg (Bbpool.find_bb (f.function_name^"#entry")) [] in
-  (* let _ = Format.printf "test\n\n@." in *)
+  let _, stmts = cfg_to_dot f.cfg (Bbpool.find_bb f.entry) [] in
   let g : Dot.DIGraph.t = {id=f.function_name; stmt_list=stmts;} in
   let _ = Format.fprintf (Format.formatter_of_out_channel oc) "%a" Dot.DIGraph.pp g in
   let _  = close_out oc in
   g
 
-let make (m : Module.t) str = 
-  Module.iter
-  (fun k f -> let _ =  Format.printf "%s\n" k in if k=str then let _ = func_to_dot f in () else ())
-  m.function_map
+let make f = 
+  func_to_dot f
 
 end
