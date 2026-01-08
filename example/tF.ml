@@ -23,7 +23,7 @@ let abs_eval (e : Expr.t) (mem: AbsMemory.t) =
     | ConstInt {value; _} -> AbsValue.alpha (IntLiteral value) ""
     | Name {name;_} -> 
       (try (match Env.find name !Env.env with 
-      | "" -> AbsValue.alpha (IntLiteral (String_addr.id_of_string name)) ""
+      | "" -> if name = "Func_main(i32%arg_esp)i32%arg_esp" then AbsValue.alpha (IntLiteral (String_addr.id_of_string name)) "" else AbsValue.top
       | a -> AbsMemory.find a mem
       ) with _ -> AbsValue.alpha (IntLiteral (String_addr.id_of_string name)) "" )
     | Void _ -> AbsValue.top

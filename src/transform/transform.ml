@@ -164,7 +164,8 @@ let rec transform_args instr func_name num_args : Expr.t list =
   [(transform_e (Llvm.operand instr num_args) func_name)]
 
 
-let transform_instr instr func_name: Inst.t=
+let transform_instr instr func_name: Inst.t =
+  (*let _ = Format.printf "%s@." (Llvm.string_of_llvalue instr) in*)
   let op = Llvm.instr_opcode instr in 
   let res = match op with
   (* | Llvm.Opcode.FNeg  *)
@@ -279,7 +280,12 @@ let transform_term term func_name bb_name: Term.t =
       succ1=(transform_e (Llvm.operand term 1) func_name)}
     | false -> Term.Br 
       {bb_name=bb_name; succ=transform_e (Llvm.operand term 0) func_name})
-  | Llvm.Opcode.Ret -> Term.Ret {bb_name=bb_name; ret=(transform_e (Llvm.operand term 0) func_name)}
+  | Llvm.Opcode.Ret -> 
+      if (Llvm.num_operands term) = 0 then 
+        Term.Ret {bb_name=bb_name; ret=(Expr.Void {ty=Type.Void})}
+      else 
+        Term.Ret {bb_name=bb_name; ret=(transform_e (Llvm.operand term 0) func_name)}
+
   | Llvm.Opcode.Switch -> Term.Switch 
     {bb_name=bb_name;
     cond=(transform_e (Llvm.operand term 0) func_name);
