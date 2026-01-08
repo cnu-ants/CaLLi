@@ -125,11 +125,31 @@ module AbsInt =
       | _, IntBot -> IntBot
       | _ -> failwith "AbsValue.app_slt : not implemented"
     
+    let app_sle n1 n2 = 
+      match n1, n2 with
+      | IntSet s1, IntSet s2 -> 
+        let min = S.min_elt s2 in
+        let s = S.filter (fun e -> if e <= min then true else false) s1 in
+        if s = S.empty then IntBot else IntSet s
+      | IntBot, _ -> IntBot
+      | _, IntBot -> IntBot
+      | _ -> failwith "AbsValue.app_slt : not implemented"
+    
     let app_sge n1 n2 = 
       match n1, n2 with
       | IntSet s1, IntSet s2 -> 
         let max = S.max_elt s2 in
         let s = S.filter (fun e -> if e >= max then true else false) s1 in
+        if s = S.empty then IntBot else IntSet s
+      | IntBot, _ -> IntBot
+      | _, IntBot -> IntBot
+      | _ -> failwith "AbsValue.app_slt : not implemented"
+    
+    let app_sgt n1 n2 = 
+      match n1, n2 with
+      | IntSet s1, IntSet s2 -> 
+        let max = S.max_elt s2 in
+        let s = S.filter (fun e -> if e > max then true else false) s1 in
         if s = S.empty then IntBot else IntSet s
       | IntBot, _ -> IntBot
       | _, IntBot -> IntBot
@@ -366,6 +386,24 @@ module AbsInt =
       | _ -> 
         let s = Format.asprintf "v1 : %a\nv2: %a\n" pp v1 pp v2 in 
         failwith ("sub_slt error"^s)
+    
+    let app_sle v1 v2 = 
+      match v1, v2 with
+      | AbsInt n1, AbsInt n2 -> AbsInt (AbsInt.app_sle n1 n2)
+      | AbsBot, _ -> AbsBot
+      | AbsTop, _ -> AbsTop
+      | _ -> 
+        let s = Format.asprintf "v1 : %a\nv2: %a\n" pp v1 pp v2 in 
+        failwith ("sub_slt error"^s)
+    
+    let app_sgt v1 v2 = 
+      match v1, v2 with
+      | AbsInt n1, AbsInt n2 -> AbsInt (AbsInt.app_sgt n1 n2)
+      | AbsBot, _ -> AbsBot
+      | AbsTop, _ -> AbsTop
+      | _ -> 
+        let s = Format.asprintf "v1 : %a\nv2: %a\n" pp v1 pp v2 in 
+        failwith ("sub_sge error"^s)
     
     let app_sge v1 v2 = 
       match v1, v2 with
