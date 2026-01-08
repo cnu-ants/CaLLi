@@ -443,6 +443,12 @@ module AbsInt =
         | AbsTop, _ | _, AbsTop -> AbsTop
         | AbsInt v1, AbsInt v2 -> AbsInt (AbsInt.BinOp.(v1 >> v2))
         | _ -> failwith "BinOp >> Error")
+      | Shl -> 
+        (match n1, n2 with
+        | AbsBot, _ | _, AbsBot -> AbsBot
+        | AbsTop, _ | _, AbsTop -> AbsTop
+        | AbsInt v1, AbsInt v2 -> AbsInt (AbsInt.BinOp.(v1 << v2))
+        | _ -> failwith "BinOp << Error")
       | Or -> 
         (match n1, n2 with
         | AbsBot, _ | _, AbsBot -> AbsBot

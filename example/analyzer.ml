@@ -68,7 +68,7 @@ let _ =
   let entry = Bbpool.find (main.entry) !Bbpool.pool in*)
   let entry = Bbpool.find (target_f.entry) !Bbpool.pool in
   
-  let _ = Analyzer.LoopCounter.set_max_count 50 in
+  let _ = Analyzer.LoopCounter.set_max_count 10 in
   let init_states = States.update (entry, MyContext.empty ()) init_mem States.empty in
   (*let _ = Format.printf "analyze...\n" in*)
   let s = Analyzer.analyze entry init_states in

@@ -49,9 +49,11 @@ let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
     let _ = Env.env := Env.add name addr !Env.env in
     AbsMemory.update addr res mem
     | BinaryOp {name; op; operand0; operand1; _} ->
+        let _ = Format.printf "op2 : %a@." Expr.pp operand1 in
     let v1 = abs_eval operand0 mem in
     let v2 = abs_eval operand1 mem in
     let res : AbsValue.t = AbsValue.binop op v1 v2 name in
+    let _ = if op = Shl then Format.printf "%a = %a << %a@." AbsValue.pp res AbsValue.pp v1 AbsValue.pp v2 else () in
     let addr = stmt.bb_name^(string_of_int stmt.index)^(string_of_int 0) in
     let _ = Env.env := Env.add name addr !Env.env in
     AbsMemory.update addr res mem
