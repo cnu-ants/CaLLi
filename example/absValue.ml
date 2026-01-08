@@ -243,6 +243,13 @@ module AbsInt =
         | IntTop, _ | _, IntTop -> IntTop
         | IntSet s1, IntSet s2 -> 
           IntSet (S.fold (fun v s -> S.fold (fun v' s' -> S.add (Z.shift_right v (Z.to_int v')) s') s2 s) s1 S.empty)
+      
+      let (<<) n1 n2 =
+        match n1, n2 with
+        | IntBot, _ | _, IntBot -> IntBot
+        | IntTop, _ | _, IntTop -> IntTop
+        | IntSet s1, IntSet s2 -> 
+          IntSet (S.fold (fun v s -> S.fold (fun v' s' -> S.add (Z.shift_left v (Z.to_int v')) s') s2 s) s1 S.empty)
     
       let logor n1 n2 =
         match n1, n2 with
