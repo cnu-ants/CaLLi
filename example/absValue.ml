@@ -104,8 +104,9 @@ module AbsInt =
         if s = S.empty then IntBot else IntSet s
       | IntBot, _ -> IntBot
       | _, IntBot -> IntBot
-      | _ -> failwith "AbsValue.app_slt : not implemented"
-    
+      | _ -> IntTop
+      
+ 
     let app_ne n1 n2 = 
       match n1, n2 with
       | IntSet s1, IntSet s2 -> 
@@ -113,7 +114,7 @@ module AbsInt =
         if s = S.empty then IntBot else IntSet s
       | IntBot, _ -> IntBot
       | _, IntBot -> IntBot
-      | _ -> failwith "AbsValue.app_slt : not implemented"
+      | _ -> IntTop
    
     let app_slt n1 n2 = 
       match n1, n2 with
@@ -123,7 +124,7 @@ module AbsInt =
         if s = S.empty then IntBot else IntSet s
       | IntBot, _ -> IntBot
       | _, IntBot -> IntBot
-      | _ -> failwith "AbsValue.app_slt : not implemented"
+      | _ -> IntTop
     
     let app_sle n1 n2 = 
       match n1, n2 with
@@ -133,7 +134,7 @@ module AbsInt =
         if s = S.empty then IntBot else IntSet s
       | IntBot, _ -> IntBot
       | _, IntBot -> IntBot
-      | _ -> failwith "AbsValue.app_slt : not implemented"
+      | _ -> IntTop
     
     let app_sge n1 n2 = 
       match n1, n2 with
@@ -143,7 +144,7 @@ module AbsInt =
         if s = S.empty then IntBot else IntSet s
       | IntBot, _ -> IntBot
       | _, IntBot -> IntBot
-      | _ -> failwith "AbsValue.app_slt : not implemented"
+      | _ -> IntTop
     
     let app_sgt n1 n2 = 
       match n1, n2 with
@@ -153,7 +154,7 @@ module AbsInt =
         if s = S.empty then IntBot else IntSet s
       | IntBot, _ -> IntBot
       | _, IntBot -> IntBot
-      | _ -> failwith "AbsValue.app_slt : not implemented"
+      | _ -> IntTop
 
     module CompOp = struct
       let (==) n1 n2 =
@@ -216,10 +217,10 @@ module AbsInt =
       | IntSet s1, IntSet s2 -> S.subset s1 s2
 
     let widen n1 n2 = 
-        if n1 <= n2 then 
+        if n1 <= n2 then
           if n1 = n2 then n2
-          else IntBot
-        else n1
+          else IntTop
+        else join n1 n2
 
     module BinOp = struct
       let (+) n1 n2 =

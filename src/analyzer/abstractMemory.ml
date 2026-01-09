@@ -102,15 +102,15 @@ module Make(AbsVal : AbstractDomain.S) : (S with type valty = AbsVal.t) =
 
     let widen mem1 mem2 = 
       match mem1, mem2 with
-      | Mem mem1, Mem mem2 ->
+      | Mem m1, Mem m2 ->
+        let widen_mem = 
         Mem (M.union 
         (fun _ v1 v2 ->  
           Some (AbsVal.widen v1 v2)
-        ) mem1 mem2)
-      | MemBot, MemBot -> 
-        MemBot
-      | MemBot, Mem _ -> 
-        mem2
+        ) m1 m2) in 
+        let _ = Format.printf "mem 1@. %a@. mem2@. %a@. mem3@.  %a@." pp mem1 pp mem2 pp widen_mem in widen_mem
+      | MemBot, MemBot -> MemBot
+      | MemBot, Mem _ -> mem2
       | _ -> failwith "mem widen..."
 
     let meet _ _ =
