@@ -25,8 +25,9 @@ module MyContext = CallSiteContext.Make(
   end
 )
 
-
+(* 분석 상태 관리 *)
 module States = States.Make (MyContext) (AbsMemory)
+(* 분석기 *)
 module Analyzer = LlvmAnalyzer.Make (AbsValue) (AbsMemory) (MyContext) (States) (TF)
 module Summary = States
 
@@ -37,6 +38,7 @@ end)
 
 module S = Set.Make(String)
 
+(* abstract value -> 변수집합 map *)
 let v_map = ref M.empty
 
 
@@ -63,19 +65,22 @@ let pp_v_map fmt v_map =
 let _ =
   let _ = Format.printf "Analyze Start@." in
   let init_mem = Analyzer.init (Init.m ())  in
+  (* 분석할 함수를 선택함 *)
   let target_f : Function.t = Module.find Sys.argv.(2) (Init.llmodule ()) in
   (*let main : Function.t = Module.main (Init.llmodule ()) in
   let entry = Bbpool.find (main.entry) !Bbpool.pool in*)
+  (* 함수에서 entry 블럭을 찾음 *)
   let entry = Bbpool.find (target_f.entry) !Bbpool.pool in
   
+  (* 루프 최대 반복횟수 설정 *)
   let _ = Analyzer.LoopCounter.set_max_count 50 in
   let init_states = States.update (entry, MyContext.empty ()) init_mem States.empty in
   let _ = Format.printf "analyze...@." in
+  (* 초기 설정하고 entry 함수 가지고 분석 *)
   let s = Analyzer.analyze entry init_states in
   let _ = Format.printf "analyze done...@." in
   let s = !Analyzer.summary in
-  
-
+  (*let _ = Format.printf "%a\n" States.pp s in*)
   let _ = Format.printf "%a\n" States.pp s in
   let _ = Format.printf "ENV \n %a\n" Env.pp !Env.env in 
   (*let _ = Format.printf "%a\n" pp_states s in

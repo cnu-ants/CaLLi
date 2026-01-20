@@ -256,6 +256,7 @@ let analyze entry states =
       let wl', states' = 
         List.fold_left
         (fun (w, s) ((succ : Basicblock.t), ctxt) -> 
+          let _ = Format.printf "-----------s----------\n BBName %s@." bb.bb_name in
           let prev_mem = States.find_mem_option (bb, ctxt) states in
           match prev_mem with
           | Some prev_mem -> 

@@ -3,7 +3,8 @@ module F = Format
 module AbsAddr = 
   struct
     type elt = string
-    module S = Set.Make(struct type t = elt let compare = compare end)
+    (*module S = Set.Make(struct type t = elt let compare = compare end)*)
+    module S = Set.Make(String)
     type t = 
       | AddrTop
       | AddrSet of S.t
@@ -11,12 +12,22 @@ module AbsAddr =
     
     let bot = AddrBot
     let top = AddrTop
-
+    (*
     let (<=) v1 v2 = 
       match v1, v2 with
       | _, AddrTop | AddrBot, _ -> true
       | AddrTop, _ | _, AddrBot -> false
       | AddrSet s1, AddrSet s2 -> (S.subset s1 s2)
+      *)
+
+    let (<=) n1 n2 =
+      match n1, n2 with
+      | AddrTop, AddrTop -> true
+      | AddrBot, AddrBot -> true
+      | _, AddrTop | AddrBot, _ -> true
+      | AddrTop, _ | _, AddrBot -> false
+      | AddrSet s1, AddrSet s2 -> S.subset s1 s2
+  
 
     let join v1 v2 = 
       match v1, v2 with
@@ -37,23 +48,32 @@ module AbsAddr =
 
     let fold f s init = 
       match s with
-      | AddrTop -> failwith "fold Error"
-      | AddrBot -> failwith "fold Error"
+      | AddrTop -> failwith "fold Error1"
+      | AddrBot -> failwith "fold Error2"
       | AddrSet s -> S.fold f s init
 
-      let min_elt s = 
+    let widen n1 n2 = 
+        if n1 <= n2 then
+          if n1 = n2 then n2
+          else AddrTop
+        else join n1 n2
+
+    let min_elt s = 
       match s with
-      | AddrTop -> failwith "fold Error"
-      | AddrBot -> failwith "fold Error"
+      | AddrTop -> failwith "fold Error3"
+      | AddrBot -> failwith "fold Error4"
       | AddrSet s -> S.min_elt s
+      
     let pp fmt v = 
       match v with
       | AddrTop -> F.fprintf fmt "AddrTop"
       | AddrBot -> F.fprintf fmt "AddrBot"
-      | AddrSet s -> S.iter 
+      | AddrSet s -> let _ = F.fprintf fmt "{ " in 
+                      let _ =S.iter 
                     (fun v -> 
-                      F.fprintf fmt "{%s }" v
-                    ) s
+                      F.fprintf fmt "%s " v
+                    ) s in 
+                    F.fprintf fmt " }"
 
   end  
 
@@ -69,6 +89,18 @@ module AbsInt =
 
     let bot :t = IntBot
     let top :t = IntTop
+
+    let fold f s init = 
+      match s with
+      | IntTop -> S.fold f (S.empty) init 
+      | IntBot -> failwith "fold Error6"
+      | IntSet s -> S.fold f s init
+
+    let iter f s = 
+      match s with
+      | IntTop -> failwith "iter Error"
+      | IntBot -> failwith "iter Error"
+      | IntSet s -> S.iter f s
 
     let alpha (n:Z.t) = 
       IntSet (S.add n S.empty)
@@ -124,7 +156,7 @@ module AbsInt =
         if s = S.empty then IntBot else IntSet s
       | IntBot, _ -> IntBot
       | _, IntBot -> IntBot
-      | _ -> IntTop
+      | _ -> IntBot
     
     let app_sle n1 n2 = 
       match n1, n2 with
@@ -134,7 +166,7 @@ module AbsInt =
         if s = S.empty then IntBot else IntSet s
       | IntBot, _ -> IntBot
       | _, IntBot -> IntBot
-      | _ -> IntTop
+      | _ -> IntBot
     
     let app_sge n1 n2 = 
       match n1, n2 with
@@ -144,7 +176,7 @@ module AbsInt =
         if s = S.empty then IntBot else IntSet s
       | IntBot, _ -> IntBot
       | _, IntBot -> IntBot
-      | _ -> IntTop
+      | _ -> IntBot
     
     let app_sgt n1 n2 = 
       match n1, n2 with
@@ -154,7 +186,7 @@ module AbsInt =
         if s = S.empty then IntBot else IntSet s
       | IntBot, _ -> IntBot
       | _, IntBot -> IntBot
-      | _ -> IntTop
+      | _ -> IntBot
 
     module CompOp = struct
       let (==) n1 n2 =
@@ -205,22 +237,45 @@ module AbsInt =
 
   end
 
+    let pp fmt n =
+      match n with
+      | IntTop -> F.fprintf fmt "IntTop"
+      | IntBot -> F.fprintf fmt "IntBot"
+      | IntSet s -> let _ = F.fprintf fmt "{" in
+                  let _ = 
+                  (F.pp_print_seq ~pp_sep:(fun fmt () -> F.fprintf fmt ", ")
+                  (fun fmt (v : Z.t) -> 
+                    F.fprintf fmt "%s" (Z.to_string v)
+                  )
+                  fmt
+                  (S.to_seq s)) in
+                  F.fprintf fmt "}"
 
     
 (** Partial order *)
     let (<=) n1 n2 =
       match n1, n2 with
-      | IntTop, IntTop -> true
-      | IntBot, IntBot -> true
-      | _, IntTop | IntBot, _ -> true
+      | _, IntTop -> true
+      | IntBot, _ -> true
       | IntTop, _ | _, IntBot -> false
       | IntSet s1, IntSet s2 -> S.subset s1 s2
 
-    let widen n1 n2 = 
-        if n1 <= n2 then
+    let (=) n1 n2 = 
+      match n1, n2 with
+      | IntSet s1, IntSet s2 -> S.equal s1 s2
+      | _ -> false
+
+    let widen n1 n2 =
+      let _ = Format.printf "widen %a %a@." pp n1 pp n2 in 
+      let res = if n1 <= n2 then
           if n1 = n2 then n2
-          else IntTop
+          else
+            let _ = Format.printf "widen2 %a %a@." pp n1 pp n2 in 
+            IntTop
         else join n1 n2
+      in
+      let _ = Format.printf "widen res %a@." pp res in res
+
 
     module BinOp = struct
       let (+) n1 n2 =
@@ -283,19 +338,6 @@ module AbsInt =
     let pp_elt fmt elt = 
       F.fprintf fmt "%d" elt
 
-    let pp fmt n =
-      match n with
-      | IntTop -> F.fprintf fmt "IntTop"
-      | IntBot -> F.fprintf fmt "IntBot"
-      | IntSet s -> let _ = F.fprintf fmt "{" in
-                  let _ = 
-                  (F.pp_print_seq ~pp_sep:(fun fmt () -> F.fprintf fmt ", ")
-                  (fun fmt (v : Z.t) -> 
-                    F.fprintf fmt "%s" (Z.to_string v)
-                  )
-                  fmt
-                  (S.to_seq s)) in
-                  F.fprintf fmt "}"
 (* 
       | IntSet s -> let _ = F.fprintf fmt "{" in
                     let _ = S.iter 
@@ -317,7 +359,7 @@ module AbsInt =
   | AbsTop -> F.fprintf fmt "AbsTop"
   | AbsBot -> F.fprintf fmt "AbsBot"
   | AbsInt (v) -> F.fprintf fmt "IntSet : %a" AbsInt.pp v 
-  | AbsAddr v -> F.fprintf fmt "%a" AbsAddr.pp v 
+  | AbsAddr v -> F.fprintf fmt "AddrSet : %a" AbsAddr.pp v 
   
   let (<=) v1 v2 = 
     match v1, v2 with
@@ -431,7 +473,7 @@ module AbsInt =
       | AbsTop, _ -> AbsTop
       | _, AbsTop -> AbsTop
       | AbsInt n1, AbsInt n2 -> AbsInt (AbsInt.widen n1 n2)
-      | AbsAddr n1, AbsAddr n2 -> v1
+      | AbsAddr n1, AbsAddr n2 -> AbsAddr (AbsAddr.widen n1 n2)
       | _ -> failwith "widen error"
 
 (*
