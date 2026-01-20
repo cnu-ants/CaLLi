@@ -1,5 +1,5 @@
 open Calli
-
+module AbsValue = AbsValue
 
 type memty = AbsMemory.t
 
@@ -25,7 +25,7 @@ let abs_eval (e : Expr.t) (mem: AbsMemory.t) =
     | ConstInt {value; _} -> AbsValue.alpha (IntLiteral value) ""
     | Name {name;_} -> 
       (try (match Env.find name !Env.env with 
-      | "" -> if name = "Func_main(i32%arg_esp)i32%arg_esp" then AbsValue.alpha (IntLiteral (String_addr.id_of_string name)) "" else AbsValue.top
+      | "" -> if name = "Func_main(i32%arg_esp,i8**%argv)i32%arg_esp" then AbsValue.alpha (IntLiteral (String_addr.id_of_string name)) "" else AbsValue.top
       | a -> AbsMemory.find a mem
       ) with _ -> AbsValue.alpha (IntLiteral (String_addr.id_of_string name)) "" )
     | Void _ -> AbsValue.top
@@ -342,10 +342,10 @@ let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
         | AbsInt i -> 
             AbsValue.AbsInt.fold 
               (fun i addrset -> 
-                let s =  (Z.to_string i) in 
+                let s =  (AbsValue.AbsInt.to_string i) in 
                 AbsValue.AbsAddr.S.add s addrset
               ) i AbsValue.AbsAddr.S.empty
-        | _ -> let _ = Format.printf "%a@." AbsValue.pp a in failwith "InttoPtr err") in
+        | _ -> let _ = Format.printf "%a@.%a@." AbsValue.pp a AbsMemory.pp mem in failwith "InttoPtr err") in
         let mem' = AbsMemory.update addr (AbsAddr addr') mem in
         let _ = Env.env := Env.add name addr !Env.env in
         mem'

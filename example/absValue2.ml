@@ -1,6 +1,6 @@
 module F = Format
-module AbsInt = AbsIntSet
 module AbsAddr = AbsAddr
+module AbsInt = AbsInterval
 
   type elt = IntLiteral of Z.t | AddrLiteral of AbsAddr.elt
   type t = | AbsTop | AbsAddr of  AbsAddr.t | AbsInt of AbsInt.t | AbsBot
@@ -93,7 +93,8 @@ module AbsAddr = AbsAddr
         let s = Format.asprintf "v1 : %a\nv2: %a\n" pp v1 pp v2 in 
         failwith ("sub_slt error"^s)
     
-    let app_sgt v1 v2 = 
+    let app_sgt v1 v2 =
+      let _ = Format.printf "Test pinpoint@." in 
       match v1, v2 with
       | AbsInt n1, AbsInt n2 -> AbsInt (AbsInt.app_sgt n1 n2)
       | AbsBot, _ -> AbsBot

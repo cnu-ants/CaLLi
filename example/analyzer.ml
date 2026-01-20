@@ -1,4 +1,6 @@
 module F = Format
+module AbsValue = AbsValue
+
 
 open Calli
 
@@ -38,29 +40,6 @@ end)
 
 module S = Set.Make(String)
 
-(* abstract value -> 변수집합 map *)
-let v_map = ref M.empty
-
-
-let pp_states fmt s = 
-  Env.iter (fun var addr ->
-     let exit_bb = Bbpool.find "Func_main(i32%arg_esp)#exit" !Bbpool.pool in
-     let absMem = States.find_mem (exit_bb, MyContext.empty ()) s in 
-     let abs_v = AbsMemory.find addr absMem in
-     let set_var = if M.mem abs_v !v_map then M.find abs_v !v_map else S.empty in
-     let set_updated = S.add var set_var in 
-     let _ = v_map := M.add abs_v set_updated !v_map in 
-     Format.fprintf fmt "%s -> %a\n" var AbsValue.pp abs_v 
-  ) !Env.env
-
-let pp_v_map fmt v_map = 
-  M.iter (fun abs_v set_var -> 
-    let _ = Format.printf "%a {\n" AbsValue.pp abs_v in 
-    let _ = S.iter (fun var ->
-      Format.printf "%s\n" var  
-    ) set_var in
-    let _ = Format.printf "}\n\n" in ()
-  ) v_map
 
 let _ =
   let _ = Format.printf "Analyze Start@." in
