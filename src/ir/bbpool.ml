@@ -9,7 +9,10 @@ let mem = M.mem
 
 let pool = ref empty
 
-let find_bb bb_name : Basicblock.t = find bb_name !pool
+let find_bb bb_name : Basicblock.t = 
+  if mem bb_name !pool
+    then find bb_name !pool
+  else failwith "bbpool not found"
 
 let pp ppf m =
   iter (fun k (v: Basicblock.t) -> Format.fprintf ppf "%s -> %s\n" k v.bb_name) m

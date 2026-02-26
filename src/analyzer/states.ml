@@ -15,8 +15,8 @@ module type S =
     val find : Basicblock.t -> t -> memty CtxtM.t 
     val mem' : Basicblock.t -> t -> bool
     val mem : Basicblock.t * ctxtty -> t -> bool
-    (* val find : KeyType.t -> t ->  *)
     val find_mem :  Basicblock.t * ctxtty -> t -> memty
+    val find_mem_opt :  Basicblock.t * ctxtty -> t -> memty option
     val update : Basicblock.t * ctxtty -> memty -> t ->t 
     val pp_ctxtMem : Format.formatter -> memty CtxtM.t -> unit
     val pp : Format.formatter -> t -> unit
@@ -46,6 +46,10 @@ module Make (Ctxt : Context.S) (AbsMem : AbstractMemory.S) : (S with type ctxtty
 
     
     let find = M.find 
+
+    let find_mem_opt (bb, ctxt) s = 
+      try CtxtM.find_opt ctxt (M.find bb s) with Not_found -> None
+
     let mem' = M.mem
     let empty = M.empty
     let iter = M.iter

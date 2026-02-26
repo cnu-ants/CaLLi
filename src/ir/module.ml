@@ -4,7 +4,19 @@
   
   let empty = M.empty
 
-  let find s m : Function.t = M.find s m
+  let find s m = 
+    let t = 
+      M.fold (fun _ v t -> 
+      let f : Function.t = v in
+      if String.starts_with ~prefix:s f.function_name 
+        then Some (v) 
+        else t
+      ) m None 
+    in
+    match t with
+    | Some (f) -> f
+    | None -> failwith "No target function exists"
+
   let add = M.add
   let fold = M.fold
   let iter = M.iter

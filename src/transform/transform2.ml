@@ -102,7 +102,7 @@ let transform_call_cfg (cfg : Cfg.t) : Cfg.t =
 
 let transform_call_func (func : Function.t) : Function.t =
   let cfg = transform_call_cfg func.cfg in
-  let f : Function.t = {function_name=func.function_name; cfg=cfg; params=func.params; metadata=func.metadata} in
+  let f : Function.t = {function_name=func.function_name; cfg=cfg; params=func.params; metadata=func.metadata; entry=func.entry} in
   f
 
 

@@ -1,152 +1,230 @@
 module F = Format
 
-(** 
-  Functor building an implementation of the Analyzer
-given abstract domain, abstract memory, analysis context, abstract states, abstract semantics.
- *)
-module Make 
-(AbsVal : AbstractDomain.S)
-(AbsMem : AbstractMemory.S with type valty = AbsVal.t) (Ctxt : Context.S with type memty = AbsMem.t) 
-(States : States.S with type ctxtty = Ctxt.t and type memty = AbsMem.t) 
-(TF : AbstractSemantics.S with type memty = AbsMem.t) 
-=
-  struct
-  
-  (** Interprocedural Control Flow Graph module tailored to the user-provided 
-  context and abstract memory.*)
-  module Icfg = Icfg.Make(AbsMem)(Ctxt)
+module Make
+  (AbsVal : AbstractDomain.S)
+  (AbsMem : AbstractMemory.S with type valty = AbsVal.t)
+  (Ctxt : Context.S with type memty = AbsMem.t)
+  (States : States.S with type ctxtty = Ctxt.t and type memty = AbsMem.t)
+  (TF : AbstractSemantics.S with type memty = AbsMem.t) =
+struct
+  module Icfg = Icfg.Make (AbsMem) (Ctxt)
 
-  (** 
-  Worklist for Abstract Interpretation.
-  *)
-  module Worklist = 
-    struct
-      exception No_more_basicblock
+  module Worklist = struct
+    exception No_more_basicblock
 
-      type ctxtty = Ctxt.t
-      type elt = Basicblock.t * ctxtty
-      type t = elt list
-      let empty = []
-      let add w wl = w::wl
-      let is_empty = function [] -> true | _ -> false
-      let next = function h::_ -> h | _ -> raise No_more_basicblock
-      let pop = function _ :: t -> t | _ -> raise No_more_basicblock
-      let pp fmt wl = 
-        F.fprintf fmt "[%a]" (F.pp_print_list 
-          ~pp_sep:(fun fmt () -> F.fprintf fmt ", ")
-          (fun fmt (bb_ctxt : Basicblock.t * Ctxt.t) -> 
-            let bb, ctxt = bb_ctxt in
-            F.fprintf fmt "%s >> %a" bb.bb_name Ctxt.pp ctxt
-          )) wl
-    end
+    type elt = Basicblock.t * Ctxt.t
+    type t = elt list
 
-  (** 
-  A loop_counter for widening operations in the analysis loop, visiting the same 
-  basicblock for a maximum count of loop_counter before performing widening.
-  *)
-  module LoopCounter = struct 
-  
-    module M = Map.Make(struct 
+    let empty = []
+    let add w wl = wl @ [ w ]
+    let is_empty = function [] -> true | _ -> false
+    let next = function h :: _ -> h | _ -> raise No_more_basicblock
+    let pop = function _ :: t -> t | _ -> raise No_more_basicblock
+
+    let ctxt_to_string (ctxt : Ctxt.t) : string = Format.asprintf "%a" Ctxt.pp ctxt
+
+    let elt_to_string ((bb, ctxt) : elt) : string = bb.bb_name ^ " >> " ^ ctxt_to_string ctxt
+
+    let to_string_list (wl : t) : string list = List.map elt_to_string wl
+  end
+
+  module LoopCounter = struct
+    module M = Map.Make (struct
       type t = Worklist.elt
       let compare = compare
     end)
 
     let empty : int M.t = M.empty
-
-    let max_count : int ref = ref 0
-
-    let set_max_count i : unit =
-      max_count := i
+    let max_count : int ref = ref 30
+    let set_max_count i = max_count := i
 
     let lc = ref empty
-
     let mem = M.mem
     let find = M.find
 
-    let update bb_ctxt = 
-      let _ = lc := 
-        if mem bb_ctxt !lc
-        then M.add bb_ctxt ((find bb_ctxt !lc) + 1) !lc
+    let update bb_ctxt =
+      lc :=
+        if mem bb_ctxt !lc then M.add bb_ctxt ((find bb_ctxt !lc) + 1) !lc
         else M.add bb_ctxt 1 !lc
-      in ()
 
-    let widen bb_ctxt = 
-      find bb_ctxt !lc > !max_count
+    let widen bb_ctxt = find bb_ctxt !lc > !max_count
   end
-
 
   let llmodule = ref Module.empty
   let icfg = ref Icfg.empty
   let summary = ref States.empty
 
+  let icfg_json_cache : string option ref = ref None
 
-  (** analysis loop *)
-  let analyze (states) = 
-    let rec analyze' (wl:Worklist.t) (states: States.t) =
-      let rec update sl wl (states : States.t) =
-        match sl with
-        | [] -> wl, states
-        | (bb_ctxt, memory) :: t -> 
-        if States.mem bb_ctxt states then
-          let prev_mem = States.find_mem bb_ctxt states in
-          begin
-            let _ = Format.printf "widen test\n" in
-            (* let _ = Format.printf "%a\n" AbsMem.pp prev_mem in
-            let _ = Format.printf "%a\n" AbsMem.pp memory in *)
-            if AbsMem.(memory <= prev_mem) then
-              let _ = Format.printf "stable\n" in
-              update t wl states
-            else
-              let joined_mem = AbsMem.(join prev_mem memory) in
-              let _ = LoopCounter.update bb_ctxt in
-              (* let _ = Format.printf "%d\n" (LoopCounter.find bb_ctxt !LoopCounter.lc) in *)
-              let widen_mem = 
-                if LoopCounter.widen bb_ctxt
-                  then 
-                    (* let _ = Format.printf "widen" in *)
-                    AbsMem.widen prev_mem memory
-                  else 
-                    (* let _ = Format.printf "join\n" in *)
-                    joined_mem 
-              in
-              update t (Worklist.add bb_ctxt wl) (States.update bb_ctxt widen_mem states)
-          end
-        else
-          update t (Worklist.add bb_ctxt wl) (States.update bb_ctxt memory states)
-      in
+  type runtime = {
+    entry : Basicblock.t;
+    mutable wl : Worklist.t;
+    mutable states : States.t;
+
+    (* bb_name -> (ctxt_string, mem_string) list *)
+    mem_view : (string, (string * string) list) Hashtbl.t;
+  }
+
+  let get_icfg_json () : string =
+    match !icfg_json_cache with
+    | Some s -> s
+    | None -> "{}"
+
+  let init_module_and_icfg (llm : Module.t) : unit =
+    llmodule := llm.function_map;
+    icfg := Icfg.make llm.function_map;
+    icfg_json_cache := Some (Icfg.to_graph_json llm.function_map !icfg |> Yojson.Safe.to_string)
+
+  let init (llm : Module.t) : AbsMem.t =
+    init_module_and_icfg llm;
+    List.fold_left
+      (fun mem (v : Global.t) -> TF.abs_interp_global v mem)
+      AbsMem.empty llm.globals
+
+  let init_runtime ~(entry : Basicblock.t) ~(init_states : States.t) : runtime =
+    {
+      entry;
+      wl = Worklist.add (entry, Ctxt.empty ()) Worklist.empty;
+      states = init_states;
+      mem_view = Hashtbl.create 256;
+    }
+
+  let update_mem_view (r : runtime) (bb : Basicblock.t) (ctxt : Ctxt.t) (mem : AbsMem.t) : unit =
+    let bbk = bb.bb_name in
+    let ck = Worklist.ctxt_to_string ctxt in
+    let mk = Format.asprintf "%a" AbsMem.pp mem in
+    let prev = match Hashtbl.find_opt r.mem_view bbk with Some x -> x | None -> [] in
+    let prev = List.filter (fun (c, _) -> not (String.equal c ck)) prev in
+    Hashtbl.replace r.mem_view bbk ((ck, mk) :: prev)
+
+  let analyze_full (entry : Basicblock.t) (states : States.t) : States.t =
+    let rec analyze' wl states =
       if Worklist.is_empty wl then states
       else
-        let bb_ctxt = Worklist.next wl in
-        
+        let bb, ctxt = Worklist.next wl in
         let wl' = Worklist.pop wl in
-        let mem = States.find_mem bb_ctxt states in
-        let (bb, ctxt) = bb_ctxt in
-        let mem' = TF.transfer bb mem in
-        let _ = summary := States.update bb_ctxt mem' !summary in
-        let next = Icfg.next bb ctxt mem' !icfg !llmodule in
-        let res = List.map (fun bb_ctxt -> (bb_ctxt, mem')) next in
-        let wl'', states' = update res wl' states in
-        analyze' wl'' states'
+        let preds : Basicblock.t list = Icfg.preds bb !icfg !llmodule in
+        let mem : AbsMem.t =
+          List.fold_left
+            (fun mem pred_bb ->
+              match States.find_mem_opt (pred_bb, ctxt) states with
+              | Some m -> AbsMem.(join m mem)
+              | None -> mem)
+            AbsMem.empty preds
+        in
+        let mem = if bb <> entry && mem = AbsMem.empty then AbsMem.bot else mem in
+        summary := States.update (bb, ctxt) mem !summary;
+
+        let mem = TF.transfer bb mem in
+        let next : (Basicblock.t * Ctxt.t) list = Icfg.next bb ctxt mem !icfg !llmodule in
+
+        let wl'', states'' =
+          List.fold_left
+            (fun (w, s) ((succ : Basicblock.t), ctxt2) ->
+              let prev_mem = States.find_mem_opt (bb, ctxt2) s in
+              match prev_mem with
+              | Some prev_mem ->
+                  if AbsMem.(mem <= prev_mem) then (w, s)
+                  else (
+                    LoopCounter.update (bb, ctxt2);
+                    let joined_mem = AbsMem.(join prev_mem mem) in
+                    let widen_mem =
+                      if LoopCounter.widen (bb, ctxt2) then AbsMem.widen prev_mem joined_mem
+                      else joined_mem
+                    in
+                    (Worklist.add (succ, ctxt2) w, States.update (bb, ctxt2) widen_mem s))
+              | None ->
+                  let w' = if mem = AbsMem.bot then w else Worklist.add (succ, ctxt2) w in
+                  (w', States.update (bb, ctxt2) mem s))
+            (wl', states) next
+        in
+        analyze' wl'' states''
     in
-    (let main = Module.main !llmodule in
-    let entry = Bbpool.find (main.function_name^"#"^"entry") !Bbpool.pool in
     let init_wl = Worklist.add (entry, Ctxt.empty ()) Worklist.empty in
-    analyze' init_wl states)
+    analyze' init_wl states
 
-    (** initilizing llmodule and icfg. must be called before ```analyze``` function called *)
-    let init (llm : Module.t) = 
-      let _ = llmodule := llm.function_map in
-      let _ = icfg := Icfg.make llm.function_map in
+        
+let analyze_one
+  (entry : Basicblock.t)
+  (bb : Basicblock.t)
+  (ctxt : Ctxt.t)
+  (wl' : Worklist.t)
+  (states : States.t)
+  : Worklist.t * States.t * AbsMem.t =
+  let preds : Basicblock.t list = Icfg.preds bb !icfg !llmodule in
+  let mem : AbsMem.t =
+    List.fold_left
+      (fun mem pred_bb ->
+        match States.find_mem_opt (pred_bb, ctxt) states with
+        | Some m -> AbsMem.(join m mem)
+        | None -> mem)
+      AbsMem.empty preds
+  in
+  let mem = if bb <> entry && mem = AbsMem.empty then AbsMem.bot else mem in
 
-      let mem = 
-        List.fold_left
-        (fun mem (v : Global.t) ->
-          TF.abs_interp_global v mem
-        )
-        AbsMem.empty llm.globals in
-      mem
+  (* Keep EXACT behavior: summary stores this mem (as your current code does). *)
+  summary := States.update (bb, ctxt) mem !summary;
 
-      
- end
+  let mem = TF.transfer bb mem in
+  let next : (Basicblock.t * Ctxt.t) list = Icfg.next bb ctxt mem !icfg !llmodule in
 
+  let wl'', states'' =
+    List.fold_left
+      (fun (w, s) ((succ : Basicblock.t), ctxt2) ->
+        (* EXACTLY as analyze_full: note key (bb, ctxt2), not (succ, ctxt2) *)
+        let prev_mem = States.find_mem_opt (bb, ctxt2) s in
+        match prev_mem with
+        | Some prev_mem ->
+            if AbsMem.(mem <= prev_mem) then (w, s)
+            else (
+              LoopCounter.update (bb, ctxt2);
+              let joined_mem = AbsMem.(join prev_mem mem) in
+              let widen_mem =
+                if LoopCounter.widen (bb, ctxt2) then AbsMem.widen prev_mem joined_mem
+                else joined_mem
+              in
+              (Worklist.add (succ, ctxt2) w, States.update (bb, ctxt2) widen_mem s))
+        | None ->
+            let w' = if mem = AbsMem.bot then w else Worklist.add (succ, ctxt2) w in
+            (w', States.update (bb, ctxt2) mem s))
+      (wl', states) next
+  in
+  (wl'', states'', mem)
 
+let step_once_json (r : runtime) : Yojson.Safe.t =
+  if Worklist.is_empty r.wl then `Assoc [ ("type", `String "done") ]
+  else
+    let bb, ctxt = Worklist.next r.wl in
+    let wl' = Worklist.pop r.wl in
+
+    (* run exactly one iteration with the SAME semantics as analyze_full *)
+    let wl'', states'', out_mem = analyze_one r.entry bb ctxt wl' r.states in
+
+    (* web view: show the mem you computed at this step *)
+    update_mem_view r bb ctxt out_mem;
+
+    r.wl <- wl'';
+    r.states <- states'';
+
+    let current_bb = bb.bb_name in
+    let current_ctxt = Worklist.ctxt_to_string ctxt in
+    let wl_view = Worklist.to_string_list r.wl in
+
+    `Assoc
+      [
+        ("type", `String "worklist");
+        ("bb", `String current_bb);
+        ("ctxt", `String current_ctxt);
+        ("current", `String (Worklist.elt_to_string (bb, ctxt)));
+        ("worklist", `List (List.map (fun s -> `String s) wl_view));
+      ]
+
+  let get_state_for_bb_json (r : runtime) (bb_name : string) : Yojson.Safe.t =
+    let lst = match Hashtbl.find_opt r.mem_view bb_name with Some x -> x | None -> [] in
+    let ctxs =
+      lst
+      |> List.rev
+      |> List.map (fun (ctxt, mem) -> `Assoc [ ("ctxt", `String ctxt); ("mem", `String mem) ])
+    in
+    `Assoc [ ("bb", `String bb_name); ("contexts", `List ctxs) ]
+end

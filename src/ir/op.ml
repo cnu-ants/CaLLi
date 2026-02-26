@@ -20,8 +20,8 @@ let to_string op =
   | Shl -> "<<"
   | LShr -> "lshr"
   | AShr -> "ashr"
-  | And -> "&&"
-  | Or -> "||"
+  | And -> "&"
+  | Or -> "|"
   | Xor -> "xor"
 
 let pp fmt op = 

@@ -13,6 +13,9 @@ let find = M.find
 let add = M.add
 let fold = M.fold
 let iter = M.iter
+let map = M.map
+let mem = M.mem
+
 
 (* The next function returns the successors of a basic block as a list in the CFG.  *)
 let next (bb : Basicblock.t) (cfg : t) : Basicblock.t list =
@@ -34,3 +37,11 @@ let pp ppf m =
   ) 
   m
 
+
+let entry cfg = 
+  let all_succs = fold (fun key _ acc -> 
+    key::acc) cfg [] in
+  let entrys = fold (fun _ succs acc ->
+    List.filter (fun node -> not (List.mem node succs) ) acc
+    ) cfg all_succs in
+  List.hd entrys
