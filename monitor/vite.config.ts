@@ -8,9 +8,10 @@ export default defineConfig({
     port: 5173,
     allowedHosts: ["lambda1.cnu.ac.kr"],
     proxy: {
-  "/icfg": { target: "http://localhost:8080", changeOrigin: true },
-  "/state": { target: "http://localhost:8080", changeOrigin: true },
-  "/ws": { target: "ws://localhost:8080", ws: true },
-}
+      "/icfg": { target: "http://localhost:8080", changeOrigin: true },
+      "/state": { target: "http://localhost:8080", changeOrigin: true },
+      "/env": { target: "http://localhost:8080", changeOrigin: true },
+      "/ws": { target: "ws://localhost:8080", ws: true },
+    },
   },
 });

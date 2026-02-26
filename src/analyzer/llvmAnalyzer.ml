@@ -61,8 +61,7 @@ struct
     mutable wl : Worklist.t;
     mutable states : States.t;
 
-    (* bb_name -> (ctxt_string, mem_string) list *)
-    mem_view : (string, (string * string) list) Hashtbl.t;
+  mem_view : (string, (string * AbsMem.t) list) Hashtbl.t;
   }
 
   let get_icfg_json () : string =
@@ -89,14 +88,12 @@ struct
       mem_view = Hashtbl.create 256;
     }
 
-  let update_mem_view (r : runtime) (bb : Basicblock.t) (ctxt : Ctxt.t) (mem : AbsMem.t) : unit =
-    let bbk = bb.bb_name in
-    let ck = Worklist.ctxt_to_string ctxt in
-    let mk = Format.asprintf "%a" AbsMem.pp mem in
-    let prev = match Hashtbl.find_opt r.mem_view bbk with Some x -> x | None -> [] in
-    let prev = List.filter (fun (c, _) -> not (String.equal c ck)) prev in
-    Hashtbl.replace r.mem_view bbk ((ck, mk) :: prev)
-
+let update_mem_view (r : runtime) (bb : Basicblock.t) (ctxt : Ctxt.t) (mem : AbsMem.t) : unit =
+  let bbk = bb.bb_name in
+  let ck = Worklist.ctxt_to_string ctxt in
+  let prev = match Hashtbl.find_opt r.mem_view bbk with Some x -> x | None -> [] in
+  let prev = List.filter (fun (c, _) -> not (String.equal c ck)) prev in
+  Hashtbl.replace r.mem_view bbk ((ck, mem) :: prev)
 
 
 module CtxtKey = struct
@@ -246,12 +243,27 @@ let step_once_json (r : runtime) : Yojson.Safe.t =
         ("worklist", `List (List.map (fun s -> `String s) wl_view));
       ]
 
-  let get_state_for_bb_json (r : runtime) (bb_name : string) : Yojson.Safe.t =
-    let lst = match Hashtbl.find_opt r.mem_view bb_name with Some x -> x | None -> [] in
-    let ctxs =
-      lst
-      |> List.rev
-      |> List.map (fun (ctxt, mem) -> `Assoc [ ("ctxt", `String ctxt); ("mem", `String mem) ])
-    in
-    `Assoc [ ("bb", `String bb_name); ("contexts", `List ctxs) ]
+
+let get_state_for_bb_json (r : runtime) (bb_name : string) : Yojson.Safe.t =
+  let lst = match Hashtbl.find_opt r.mem_view bb_name with Some x -> x | None -> [] in
+  let ctxs =
+    lst
+    |> List.rev
+    |> List.map (fun (ctxt, mem) ->
+        let entries =
+          if AbsMem.is_bot mem then []
+          else
+            AbsMem.bindings mem
+            |> List.map (fun (addr, v) ->
+                `Assoc [ ("addr", `String addr); ("value", `String (Format.asprintf "%a" AbsVal.pp v)) ])
+        in
+        `Assoc
+          [
+            ("ctxt", `String ctxt);
+            ("is_bot", `Bool (AbsMem.is_bot mem));
+            ("entries", `List entries);
+          ])
+  in
+  `Assoc [ ("bb", `String bb_name); ("contexts", `List ctxs) ]
+
 end

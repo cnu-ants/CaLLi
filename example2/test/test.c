@@ -5,7 +5,10 @@ static int bar(int x) {
 }
 
 int foo(int a) {
-    int b = bar(a);    /* single call site */
+    int b = a;
+    while (b < 45) {
+      b = bar(b);
+    }    /* single call site */
     return b;
 }
 

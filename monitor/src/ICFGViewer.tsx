@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactFlow, { Background, Controls, Position } from "reactflow";
-import type { Edge, Node, ReactFlowInstance } from "reactflow";
+import type { Edge, Node, ReactFlowInstance, Viewport } from "reactflow";
 import "reactflow/dist/style.css";
 import dagre from "dagre";
 
@@ -13,33 +13,29 @@ type WLMsg =
   | { type: "done" }
   | { type: "error"; msg: string };
 
-type StateResp = { bb: string; contexts: { ctxt: string; mem: string }[] };
+type StateResp = {
+  bb: string;
+  contexts: { ctxt: string; is_bot: boolean; entries: { addr: string; value: string }[] }[];
+};
 
-const NODE_W = 360;
-const NODE_H = 190;
+type EnvResp = { items: { var: string; addr: string }[] };
 
-function layout(nodes: Node[], edges: Edge[]) {
-  const g = new dagre.graphlib.Graph();
-  g.setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: "TB", nodesep: 40, ranksep: 140 });
+const NODE_W = 420;
 
-  for (const n of nodes) g.setNode(n.id, { width: NODE_W, height: NODE_H });
-  for (const e of edges) g.setEdge(e.source, e.target);
+// UI scale (panels)
+const UI_SCALE = 1.5;
 
-  dagre.layout(g);
+// Graph scale (node content font)
+const NODE_SCALE = 1.25;
 
-  const laidOut = nodes.map((n) => {
-    const p = g.node(n.id);
-    return {
-      ...n,
-      position: { x: p.x - NODE_W / 2, y: p.y - NODE_H / 2 },
-      targetPosition: Position.Top,
-      sourcePosition: Position.Bottom,
-    };
-  });
+const NODE_TITLE_FS = Math.round(15 * NODE_SCALE);
+const NODE_BODY_FS = Math.round(13 * NODE_SCALE);
+const NODE_LINE_H = Math.round(16 * NODE_SCALE);
 
-  return { nodes: laidOut, edges };
-}
+// Bigger ctxt buttons
+const CTX_BTN_FS = Math.round(12 * NODE_SCALE * 1.15);
+const CTX_BTN_PAD_Y = Math.round(4 * NODE_SCALE * 1.2);
+const CTX_BTN_PAD_X = Math.round(10 * NODE_SCALE * 1.2);
 
 function edgeStyle(kind: "call" | "fallback" | "ret" | "intra") {
   if (kind === "call") return { strokeWidth: 2.5, stroke: "#2563eb" };
@@ -48,9 +44,48 @@ function edgeStyle(kind: "call" | "fallback" | "ret" | "intra") {
   return { strokeWidth: 2.5, stroke: "#111827" };
 }
 
+function computeNodeHeight(instrsLen: number) {
+  const header = 44 * NODE_SCALE;
+  const ctxArea = 52 * NODE_SCALE; // slightly taller for bigger buttons
+  const padding = 28 * NODE_SCALE;
+  const termExtra = 16 * NODE_SCALE;
+  const lines = Math.max(1, instrsLen);
+  return Math.min(1400, Math.round(header + ctxArea + padding + lines * NODE_LINE_H + termExtra));
+}
+
+function layout(nodes: Node[], edges: Edge[]) {
+  const g = new dagre.graphlib.Graph();
+  g.setDefaultEdgeLabel(() => ({}));
+  g.setGraph({ rankdir: "TB", nodesep: 50, ranksep: 150 });
+
+  for (const n of nodes) {
+    const w = (n.width as number) || NODE_W;
+    const h = (n.height as number) || 200;
+    g.setNode(n.id, { width: w, height: h });
+  }
+  for (const e of edges) g.setEdge(e.source, e.target);
+
+  dagre.layout(g);
+
+  const laidOut = nodes.map((n) => {
+    const p = g.node(n.id);
+    const w = (n.width as number) || NODE_W;
+    const h = (n.height as number) || 200;
+    return {
+      ...n,
+      position: { x: p.x - w / 2, y: p.y - h / 2 },
+      targetPosition: Position.Top,
+      sourcePosition: Position.Bottom,
+    };
+  });
+
+  return { nodes: laidOut, edges };
+}
+
 export default function ICFGViewer() {
   const [graph, setGraph] = useState<GraphJSON | null>(null);
   const [err, setErr] = useState<string | null>(null);
+
   const [rfInstance, setRfInstance] = useState<ReactFlowInstance | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -60,13 +95,14 @@ export default function ICFGViewer() {
   const [currentBb, setCurrentBb] = useState<string>("");
   const [currentCtxt, setCurrentCtxt] = useState<string>("");
 
-  // bb -> contexts list
-  const [ctxMap, setCtxMap] = useState<Record<string, { ctxt: string; mem: string }[]>>({});
+  const [ctxMap, setCtxMap] = useState<Record<string, StateResp["contexts"]>>({});
 
-  // right panel selection
-  const [selBb, setSelBb] = useState<string>("");
+  const [selBb, setSelBb] = useState<string>(""); // selected node (blue)
   const [selCtxt, setSelCtxt] = useState<string>("");
-  const [selMem, setSelMem] = useState<string>("");
+  const [selEntries, setSelEntries] = useState<{ addr: string; value: string }[]>([]);
+  const [selIsBot, setSelIsBot] = useState<boolean>(false);
+
+  const [envItems, setEnvItems] = useState<{ var: string; addr: string }[]>([]);
 
   useEffect(() => {
     fetch("/icfg")
@@ -92,20 +128,60 @@ export default function ICFGViewer() {
     return j.contexts;
   };
 
-  const selectBestContext = (bb: string, contexts: { ctxt: string; mem: string }[], preferredCtxt: string) => {
+  const fetchEnv = async () => {
+    const r = await fetch("/env");
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = (await r.json()) as EnvResp;
+    setEnvItems(j.items || []);
+  };
+
+  const selectBestContext = (bb: string, contexts: StateResp["contexts"], preferredCtxt: string) => {
+    setSelBb(bb);
     if (contexts.length === 0) {
-      setSelBb(bb);
       setSelCtxt("");
-      setSelMem("(no state yet for this basic block)");
+      setSelIsBot(false);
+      setSelEntries([]);
       return;
     }
     const hit = contexts.find((c) => c.ctxt === preferredCtxt) ?? contexts[0];
-    setSelBb(bb);
     setSelCtxt(hit.ctxt);
-    setSelMem(hit.mem);
+    setSelIsBot(hit.is_bot);
+    setSelEntries(hit.entries);
   };
 
-  // WebSocket: on every step, auto-load states for current bb and auto-select current ctxt
+  const centerNodeBetweenPanels = (bbId: string, nodes: Node[]) => {
+    if (!rfInstance) return;
+    const node = nodes.find((n) => n.id === bbId);
+    if (!node) return;
+
+    const w = (node.width as number) || NODE_W;
+    const h = (node.height as number) || 200;
+    const nodeCenterX = node.position.x + w / 2;
+    const nodeCenterY = node.position.y + h / 2;
+
+    const LEFT_W = Math.round(430 * UI_SCALE);
+    const RIGHT_W = Math.round(820 * UI_SCALE);
+    const M = 16;
+
+    const screenW = window.innerWidth;
+    const screenH = window.innerHeight;
+
+    const desiredScreenX = (LEFT_W + M + (screenW - RIGHT_W - M)) / 2;
+    const desiredScreenY = screenH / 2;
+
+    const vp: Viewport =
+      (rfInstance as any).getViewport ? (rfInstance as any).getViewport() : { x: 0, y: 0, zoom: 1 };
+    const zoom = vp.zoom ?? 1;
+
+    const nextViewport: Viewport = {
+      x: desiredScreenX - nodeCenterX * zoom,
+      y: desiredScreenY - nodeCenterY * zoom,
+      zoom,
+    };
+
+    (rfInstance as any).setViewport(nextViewport, { duration: 250 });
+  };
+
   useEffect(() => {
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
     const wsUrl = `${proto}://${window.location.host}/ws`;
@@ -126,17 +202,18 @@ export default function ICFGViewer() {
           setCurrentCtxt(msg.ctxt);
           setWl(msg.worklist);
 
-          // auto-fetch current bb states and select msg.ctxt by default
           try {
             const contexts = await fetchStatesForBb(msg.bb);
+            // keep selected bb as-is; but if nothing selected yet, default-select current bb
+            setSelBb((prev) => (prev ? prev : msg.bb));
             selectBestContext(msg.bb, contexts, msg.ctxt);
-          } catch (e) {
-            // keep UI alive
-          }
+          } catch {}
+
+          try {
+            await fetchEnv();
+          } catch {}
         }
-      } catch {
-        // ignore
-      }
+      } catch {}
     };
 
     return () => {
@@ -153,24 +230,34 @@ export default function ICFGViewer() {
 
   const onNodeClick = async (_: any, node: any) => {
     const bb = node.id as string;
+
+    // Blue select + center
+    setSelBb(bb);
+
     try {
       const contexts = ctxMap[bb] ?? (await fetchStatesForBb(bb));
-      // prefer currentCtxt if the clicked node is currentBb; otherwise pick first
       const preferred = bb === currentBb ? currentCtxt : (contexts[0]?.ctxt ?? "");
       selectBestContext(bb, contexts, preferred);
-    } catch (e) {
-      setSelBb(bb);
+    } catch {
       setSelCtxt("");
-      setSelMem(String(e));
+      setSelEntries([]);
+      setSelIsBot(false);
     }
+
+    // center after selection (uses current layout nodes)
+    // will be called again by effect if needed
+    // (safe even if not found)
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define
   };
 
   const chooseContext = (bb: string, ctxt: string) => {
     const lst = ctxMap[bb] ?? [];
     const hit = lst.find((x) => x.ctxt === ctxt);
+    if (!hit) return;
     setSelBb(bb);
-    setSelCtxt(ctxt);
-    setSelMem(hit ? hit.mem : "(missing mem)");
+    setSelCtxt(hit.ctxt);
+    setSelIsBot(hit.is_bot);
+    setSelEntries(hit.entries);
   };
 
   const rf = useMemo(() => {
@@ -180,14 +267,15 @@ export default function ICFGViewer() {
       const label = n.label ?? n.id;
       const instrs = Array.isArray(n.instrs) ? n.instrs : [];
       const isCurrent = currentBb !== "" && n.id === currentBb;
+      const isSelected = selBb !== "" && n.id === selBb;
 
       const contexts = ctxMap[n.id] ?? [];
       const ctxButtons =
         contexts.length === 0 ? (
-          <div style={{ fontSize: 12, color: "#6b7280" }}>(no contexts yet)</div>
+          <div style={{ fontSize: CTX_BTN_FS, color: "#6b7280", textAlign: "left" }}>(no contexts yet)</div>
         ) : (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {contexts.slice(0, 8).map((c) => (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {contexts.slice(0, 12).map((c) => (
               <button
                 key={c.ctxt}
                 onClick={(ev) => {
@@ -195,10 +283,13 @@ export default function ICFGViewer() {
                   chooseContext(n.id, c.ctxt);
                 }}
                 style={{
-                  fontSize: 12,
-                  border: c.ctxt === selCtxt && n.id === selBb ? "2px solid #ef4444" : "1px solid #d1d5db",
-                  borderRadius: 6,
-                  padding: "2px 6px",
+                  fontSize: CTX_BTN_FS,
+                  border:
+                    c.ctxt === selCtxt && n.id === selBb
+                      ? "3px solid #ef4444"
+                      : "2px solid #d1d5db",
+                  borderRadius: 8,
+                  padding: `${CTX_BTN_PAD_Y}px ${CTX_BTN_PAD_X}px`,
                   background: "#fff",
                   cursor: "pointer",
                 }}
@@ -207,47 +298,63 @@ export default function ICFGViewer() {
                 ctxt
               </button>
             ))}
-            {contexts.length > 8 && <span style={{ fontSize: 12 }}>+{contexts.length - 8}</span>}
+            {contexts.length > 12 && <span style={{ fontSize: CTX_BTN_FS }}>+{contexts.length - 12}</span>}
           </div>
         );
+
+      const h = computeNodeHeight(instrs.length);
+
+      // Border priority: current(red) > selected(blue) > default
+      const border = isCurrent ? "3px solid #ef4444" : isSelected ? "3px solid #2563eb" : "1px solid #111827";
+      const shadow = isCurrent
+        ? "0 0 0 3px rgba(239,68,68,0.15)"
+        : isSelected
+        ? "0 0 0 3px rgba(37,99,235,0.12)"
+        : "none";
 
       return {
         id: n.id,
         data: {
           label: (
-            <div style={{ fontFamily: "monospace" }}>
-              <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 10, wordBreak: "break-all" }}>{label}</div>
-
-              <div style={{ marginBottom: 10 }}>{ctxButtons}</div>
-
-              <pre
+            <div style={{ fontFamily: "monospace", textAlign: "left" }}>
+              <div
                 style={{
-                  margin: 0,
-                  fontSize: 13,
-                  lineHeight: 1.25,
+                  fontSize: NODE_TITLE_FS,
+                  fontWeight: 700,
+                  marginBottom: 10,
+                  wordBreak: "break-all",
+                  textAlign: "left",
+                }}
+              >
+                {label}
+              </div>
+
+              <div style={{ marginBottom: 12, textAlign: "left" }}>{ctxButtons}</div>
+
+              <div
+                style={{
+                  fontSize: NODE_BODY_FS,
+                  lineHeight: `${NODE_LINE_H}px`,
                   whiteSpace: "pre-wrap",
                   wordBreak: "break-word",
-                  maxHeight: 110,
-                  overflow: "auto",
-                  borderTop: "1px solid #e5e7eb",
-                  paddingTop: 10,
+                  textAlign: "left",
                 }}
               >
                 {instrs.length > 0 ? instrs.join("\n") : "(no instruction data yet)"}
-              </pre>
+              </div>
             </div>
           ),
         },
         position: { x: 0, y: 0 },
         width: NODE_W,
-        height: NODE_H,
+        height: h,
         style: {
-          border: isCurrent ? "3px solid #ef4444" : "1px solid #111827",
+          border,
           borderRadius: 10,
-          padding: 12,
+          padding: Math.round(12 * NODE_SCALE),
           width: NODE_W,
           background: "#ffffff",
-          boxShadow: isCurrent ? "0 0 0 3px rgba(239,68,68,0.15)" : "none",
+          boxShadow: shadow,
         },
       };
     });
@@ -258,20 +365,38 @@ export default function ICFGViewer() {
     });
 
     return layout(nodes, edges);
-  }, [graph, currentBb, ctxMap, selBb, selCtxt, currentCtxt]);
+  }, [graph, currentBb, selBb, ctxMap, selCtxt]);
+
+  // Center when CURRENT changes (red)
+  useEffect(() => {
+    if (!rfInstance || !currentBb) return;
+    centerNodeBetweenPanels(currentBb, rf.nodes);
+  }, [rfInstance, currentBb, rf.nodes]);
+
+  // Center when SELECTED changes (blue)
+  useEffect(() => {
+    if (!rfInstance || !selBb) return;
+    centerNodeBetweenPanels(selBb, rf.nodes);
+  }, [rfInstance, selBb, rf.nodes]);
 
   useEffect(() => {
     if (rfInstance && rf.nodes.length > 0) rfInstance.fitView({ padding: 0.2 });
   }, [rfInstance, rf.nodes.length]);
 
-  if (!graph && !err) return <div style={{ padding: 16, fontFamily: "monospace", fontSize: 14 }}>Loading /icfg...</div>;
+  if (!graph && !err) return <div style={{ padding: 16, fontFamily: "monospace" }}>Loading /icfg...</div>;
   if (err)
     return (
-      <div style={{ padding: 16, fontFamily: "monospace", fontSize: 14 }}>
+      <div style={{ padding: 16, fontFamily: "monospace" }}>
         <div>Failed to load /icfg</div>
         <pre>{err}</pre>
       </div>
     );
+
+  const panelFont = Math.round(13 * UI_SCALE);
+  const panelSmall = Math.round(12 * UI_SCALE);
+
+  const LEFT_PANEL_W = Math.round(430 * UI_SCALE);
+  const RIGHT_PANEL_W = Math.round(820 * UI_SCALE);
 
   return (
     <div style={{ width: "100vw", height: "100vh" }}>
@@ -283,45 +408,48 @@ export default function ICFGViewer() {
           left: 8,
           zIndex: 9999,
           background: "#fff",
-          padding: 10,
+          padding: Math.round(10 * UI_SCALE),
           border: "1px solid #ccc",
-          borderRadius: 8,
+          borderRadius: 10,
           fontFamily: "monospace",
-          fontSize: 13,
-          width: 430,
+          fontSize: panelFont,
+          width: LEFT_PANEL_W,
         }}
       >
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <button onClick={() => sendCmd("play")} disabled={wsStatus !== "connected"}>
+        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+          <button onClick={() => sendCmd("play")} disabled={wsStatus !== "connected"} style={{ fontSize: panelFont }}>
             Play
           </button>
-          <button onClick={() => sendCmd("pause")} disabled={wsStatus !== "connected"}>
+          <button onClick={() => sendCmd("pause")} disabled={wsStatus !== "connected"} style={{ fontSize: panelFont }}>
             Pause
           </button>
-          <button onClick={() => sendCmd("step")} disabled={wsStatus !== "connected"}>
+          <button onClick={() => sendCmd("step")} disabled={wsStatus !== "connected"} style={{ fontSize: panelFont }}>
             Step
           </button>
-          <span style={{ marginLeft: 8 }}>ws={wsStatus}</span>
+          <span style={{ marginLeft: 10 }}>ws={wsStatus}</span>
         </div>
 
-        <div style={{ marginTop: 10 }}>
+        <div style={{ marginTop: 12 }}>
           <div style={{ fontWeight: 700 }}>Current</div>
-          <div style={{ fontSize: 12, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+          <div style={{ fontSize: panelSmall, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
             {currentBb ? `${currentBb} / ${currentCtxt}` : "(none)"}
+          </div>
+          <div style={{ marginTop: 8, fontSize: panelSmall }}>
+            Selected: {selBb ? selBb : "(none)"}
           </div>
         </div>
 
-        <div style={{ marginTop: 10 }}>
+        <div style={{ marginTop: 12 }}>
           <div style={{ fontWeight: 700 }}>Worklist</div>
           <div
             style={{
-              marginTop: 6,
-              maxHeight: 240,
+              marginTop: 8,
+              maxHeight: Math.round(240 * UI_SCALE),
               overflow: "auto",
               border: "1px solid #e5e7eb",
-              borderRadius: 6,
-              padding: 8,
-              fontSize: 12,
+              borderRadius: 8,
+              padding: Math.round(8 * UI_SCALE),
+              fontSize: panelSmall,
               lineHeight: 1.25,
             }}
           >
@@ -329,23 +457,16 @@ export default function ICFGViewer() {
               <div>(empty)</div>
             ) : (
               wl.map((x, i) => (
-                <div key={i} style={{ padding: "2px 0", borderBottom: "1px solid #f3f4f6" }}>
+                <div key={i} style={{ padding: "4px 0", borderBottom: "1px solid #f3f4f6" }}>
                   {x}
                 </div>
               ))
             )}
           </div>
         </div>
-
-        <div style={{ marginTop: 10, fontSize: 12 }}>
-          <span style={{ color: "#2563eb" }}>call</span>{" "}
-          <span style={{ color: "#6b7280" }}>fallback</span>{" "}
-          <span style={{ color: "#16a34a" }}>ret</span>{" "}
-          <span style={{ color: "#111827" }}>intra</span>
-        </div>
       </div>
 
-      {/* right memory panel */}
+      {/* right panel */}
       <div
         style={{
           position: "fixed",
@@ -353,25 +474,83 @@ export default function ICFGViewer() {
           right: 8,
           zIndex: 9999,
           background: "#fff",
-          padding: 10,
+          padding: Math.round(10 * UI_SCALE),
           border: "1px solid #ccc",
-          borderRadius: 8,
+          borderRadius: 10,
           fontFamily: "monospace",
-          fontSize: 13,
-          width: 520,
+          fontSize: panelFont,
+          width: RIGHT_PANEL_W,
           maxHeight: "95vh",
           overflow: "auto",
         }}
       >
-        <div style={{ fontWeight: 700 }}>Selected State</div>
-        <div style={{ marginTop: 6, fontSize: 12, wordBreak: "break-word" }}>
-          bb: {selBb || "(none)"}
-          <br />
-          ctxt: {selCtxt || "(none)"}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: Math.round(14 * UI_SCALE) }}>
+          <div>
+            <div style={{ fontWeight: 700 }}>ENV (var → addr)</div>
+            <div style={{ marginTop: 10, fontSize: panelSmall }}>
+              {envItems.length === 0 ? (
+                <div>(empty)</div>
+              ) : (
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", paddingBottom: 8 }}>var</th>
+                      <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", paddingBottom: 8 }}>addr</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {envItems.map((it, i) => (
+                      <tr key={i}>
+                        <td style={{ verticalAlign: "top", padding: "8px 10px 8px 0", borderBottom: "1px solid #f3f4f6" }}>
+                          {it.var}
+                        </td>
+                        <td style={{ verticalAlign: "top", padding: "8px 0", borderBottom: "1px solid #f3f4f6" }}>
+                          {it.addr}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+
+          <div>
+            <div style={{ fontWeight: 700 }}>Selected State</div>
+            <div style={{ marginTop: 10, fontSize: panelSmall, wordBreak: "break-word" }}>
+              bb: {selBb || "(none)"} <br />
+              ctxt: {selCtxt || "(none)"} <br />
+              bot: {selBb ? String(selIsBot) : "(n/a)"}
+            </div>
+
+            <div style={{ marginTop: 12, fontSize: panelSmall }}>
+              {selEntries.length === 0 ? (
+                <div>(no entries)</div>
+              ) : (
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", paddingBottom: 8 }}>addr</th>
+                      <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", paddingBottom: 8 }}>value</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selEntries.map((e, i) => (
+                      <tr key={i}>
+                        <td style={{ verticalAlign: "top", padding: "8px 10px 8px 0", borderBottom: "1px solid #f3f4f6" }}>
+                          {e.addr}
+                        </td>
+                        <td style={{ verticalAlign: "top", padding: "8px 0", borderBottom: "1px solid #f3f4f6" }}>
+                          {e.value}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
         </div>
-        <pre style={{ marginTop: 10, fontSize: 12, lineHeight: 1.25, whiteSpace: "pre-wrap" }}>
-          {selMem || "(step or click a node)"}
-        </pre>
       </div>
 
       <ReactFlow nodes={rf.nodes} edges={rf.edges} onInit={setRfInstance} onNodeClick={onNodeClick}>

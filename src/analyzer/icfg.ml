@@ -8,7 +8,6 @@ struct
   let add = M.add
   let iter = M.iter
   let fold = M.fold
-  let pp _ _ = ()
 
   let make (m : Function.t Module.M.t) : t =
     let icfg =
@@ -37,6 +36,13 @@ struct
     in
     icfg
 
+  let preds_intra (bb : Basicblock.t) _ m : Basicblock.t list =
+    let f = Module.find bb.func_name m in
+    Cfg.fold
+      (fun bb_name nexts lst ->
+        if List.mem bb.bb_name nexts then (Bbpool.find_bb bb_name) :: lst else lst)
+      f.cfg []
+
   let preds (bb : Basicblock.t) icfg _ : Basicblock.t list =
     M.fold
       (fun from succs acc ->
@@ -47,6 +53,12 @@ struct
   let next_fallback (bb : Basicblock.t) m : Basicblock.t list =
     let f = Module.find bb.func_name m in
     Cfg.next bb f.cfg
+
+  let next_intra (bb : Basicblock.t) (ctxt : Ctxt.t) (mem : AbsMem.t) _ m :
+      (Basicblock.t * Ctxt.t) list =
+    let f = Module.find bb.func_name m in
+    let next_bb_list = Cfg.next bb f.cfg in
+    Ctxt.apply bb next_bb_list ctxt mem
 
   let succ (bb : Basicblock.t) icfg =
     M.find bb.bb_name icfg |> List.map (fun b -> Bbpool.find b !Bbpool.pool)
@@ -66,16 +78,88 @@ struct
       let fallbacks = next_fallback bb m in
       List.map (fun v -> (v, ctxt)) fallbacks
 
-  (* --- JSON helpers --- *)
+  let pp _ icfg =
+    M.iter
+      (fun k v ->
+        let _ = Format.printf "%s -> " k in
+        let _ = List.iter (fun s -> Format.printf "%s ," s) v in
+        Format.printf "\n")
+      icfg
 
-  let bb_instrs_as_strings (bb : Basicblock.t) : string list =
-    (* This is the same trick you used earlier when instruction rendering worked. *)
-    let s = Format.asprintf "%a" Basicblock.pp bb in
-    s
-    |> String.split_on_char '\n'
-    |> List.map String.trim
-    |> List.filter (fun x -> x <> "")
+  (* ---------- JSON helpers: instruction rendering without using Basicblock.pp/Inst.pp/Term.pp ---------- *)
 
+  let expr_s (e : Expr.t) : string = Format.asprintf "%a" Expr.pp e
+  let ty_s (t : Type.t) : string = Format.asprintf "%a" Type.pp t
+  let op_s (o : Op.t) : string = Format.asprintf "%a" Op.pp o
+  let cond_s (c : Cond.t) : string = Format.asprintf "%a" Cond.pp c
+
+  let inst_to_string (i : Inst.t) : string =
+    match i with
+    | BinaryOp { name; op; operand0; operand1; _ } ->
+        Printf.sprintf "%s = %s %s %s" name (op_s op) (expr_s operand0) (expr_s operand1)
+    | Alloc { name; ty } ->
+        Printf.sprintf "%s = alloc %s" name (ty_s ty)
+    | Store { operand; name; ty } ->
+        Printf.sprintf "store %s %s %s" (expr_s operand) (ty_s ty) name
+    | Load { name; operand; _ } ->
+        Printf.sprintf "%s = load %s" name (expr_s operand)
+    | PtrToInt { name; operand; ty } ->
+        Printf.sprintf "%s = ptrtoint %s to %s" name (expr_s operand) (ty_s ty)
+    | IntToPtr { name; operand; ty } ->
+        Printf.sprintf "%s = inttoptr %s to %s" name (expr_s operand) (ty_s ty)
+    | ICmp { name; cond; operand0; operand1; _ } ->
+        Printf.sprintf "%s = icmp %s %s %s" name (cond_s cond) (expr_s operand0) (expr_s operand1)
+    | Select { name; cond; operand0; operand1; _ } ->
+        Printf.sprintf "%s = select %s %s %s" name (expr_s cond) (expr_s operand0) (expr_s operand1)
+    | ReturnSite { name; ty } ->
+        Printf.sprintf "%s = %s(call return)" name (ty_s ty)
+    | Call { name; _ } ->
+        Printf.sprintf "call %s" name
+    | GetElementPtr { name; ty; operand; index } ->
+        let idxs = index |> List.map expr_s |> String.concat ", " in
+        Printf.sprintf "%s = getelementptr %s %s, %s" name (ty_s ty) (expr_s operand) idxs
+    | BitCast { name; operand; ty } ->
+        Printf.sprintf "%s = bitcast %s to %s" name (expr_s operand) (ty_s ty)
+    | Sext { name; operand; ty } ->
+        Printf.sprintf "%s = sext %s to %s" name (expr_s operand) (ty_s ty)
+    | Zext { name; operand; ty } ->
+        Printf.sprintf "%s = zext %s to %s" name (expr_s operand) (ty_s ty)
+    | Trunc { name; operand; ty } ->
+        Printf.sprintf "%s = trunc %s to %s" name (expr_s operand) (ty_s ty)
+    | Prune { cond; value } ->
+        Printf.sprintf "prune %s %s" cond (expr_s value)
+    | NPrune { cond; value } ->
+        let vs = value |> List.map expr_s |> String.concat ", " in
+        Printf.sprintf "!prune %s %s" cond vs
+    | Other -> "Other"
+
+  let term_to_string (t : Term.t) : string =
+    match t with
+    | CallSite { callee; args; _ } ->
+        let a = args |> List.map expr_s |> String.concat ", " in
+        Printf.sprintf "call %s(%s)" callee a
+    | Br { succ; _ } ->
+        Printf.sprintf "br %s" (expr_s succ)
+    | CondBr { cond; succ0; succ1; _ } ->
+        Printf.sprintf "condbr %s %s %s" (expr_s cond) (expr_s succ0) (expr_s succ1)
+    | Ret { ret; _ } ->
+        Printf.sprintf "ret %s" (expr_s ret)
+    | Exit _ ->
+        "exit"
+    | Switch { cond; default_succ; succ; _ } ->
+        let cases =
+          succ
+          |> List.map (fun (e1, e2) -> Printf.sprintf "%s %s" (expr_s e1) (expr_s e2))
+          |> String.concat ", "
+        in
+        Printf.sprintf "switch %s %s [%s]" (expr_s cond) (expr_s default_succ) cases
+    | Other -> "Other"
+
+  let bb_instrs (bb : Basicblock.t) : string list =
+    let stmt_lines = bb.stmts |> List.map (fun (s : Stmt.t) -> inst_to_string s.inst) in
+    stmt_lines @ [ term_to_string bb.term ]
+
+  (* Edge kind classification *)
   let edge_kind_of (m : Function.t Module.M.t) ~(from_id : string) ~(to_id : string) : string =
     let from_bb = Bbpool.find from_id !Bbpool.pool in
     match from_bb.term with
@@ -91,19 +175,20 @@ struct
 
   let to_graph_json (m : Function.t Module.M.t) (icfg : t) : Yojson.Safe.t =
     let module S = Set.Make (String) in
-    let nodes =
+    let node_ids =
       M.fold
         (fun from succs acc ->
           let acc = S.add from acc in
           List.fold_left (fun a s -> S.add s a) acc succs)
         icfg S.empty
     in
+
     let nodes_json =
-      nodes
+      node_ids
       |> S.to_list
       |> List.map (fun id ->
              let bb = Bbpool.find id !Bbpool.pool in
-             let instrs = bb_instrs_as_strings bb in
+             let instrs = bb_instrs bb in
              `Assoc
                [
                  ("id", `String id);
@@ -111,6 +196,7 @@ struct
                  ("instrs", `List (List.map (fun x -> `String x) instrs));
                ])
     in
+
     let edges_json, _ =
       M.fold
         (fun from succs (acc, idx) ->
@@ -130,5 +216,6 @@ struct
             (acc, idx) succs)
         icfg ([], 0)
     in
+
     `Assoc [ ("nodes", `List nodes_json); ("edges", `List (List.rev edges_json)) ]
 end

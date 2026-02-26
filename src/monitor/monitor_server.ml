@@ -7,6 +7,11 @@ module Make (A : sig
   val get_state_for_bb_json : runtime -> string -> Yojson.Safe.t
 end) =
 struct
+  let env_json () : Yojson.Safe.t =
+    let items = ref [] in
+    Env.iter (fun k v -> items := (`Assoc [ ("var", `String k); ("addr", `String v) ]) :: !items) !(Env.env);
+    `Assoc [ ("items", `List (List.rev !items)) ]
+
   let start ~(runtime : A.runtime) ~(interface : string) ~(port : int) : unit =
     Printexc.record_backtrace true;
 
@@ -26,12 +31,10 @@ struct
               Lwt.return_unit
           | _ -> Lwt_unix.sleep 0.10 >>= send_loop
       in
-
       let send_one_step () =
         let msg = A.step_once_json runtime in
         Dream.send ws (Yojson.Safe.to_string msg)
       in
-
       let rec recv_loop () =
         Dream.receive ws >>= function
         | None -> Lwt.return_unit
@@ -39,10 +42,7 @@ struct
             let cmd = String.trim txt in
             if String.equal cmd "play" then (
               paused := false;
-              if not !running then (
-                running := true;
-                Lwt.async send_loop
-              );
+              if not !running then (running := true; Lwt.async send_loop);
               recv_loop ()
             ) else if String.equal cmd "pause" then (
               paused := true;
@@ -70,6 +70,7 @@ struct
          [
            Dream.get "/icfg" (fun _req -> Dream.json (A.get_icfg_json ()));
            Dream.get "/state" state_handler;
+           Dream.get "/env" (fun _req -> Dream.json (Yojson.Safe.to_string (env_json ())));
            Dream.get "/ws" (fun _req -> Dream.websocket on_websocket);
          ]
 end
