@@ -124,36 +124,26 @@ module PrevM = Map.Make (CtxtKey)
 
         let mem = TF.transfer bb mem in
         let next : (Basicblock.t * Ctxt.t) list = Icfg.next bb ctxt mem !icfg !llmodule in
-let prev_snapshot =
-  List.fold_left
-    (fun acc (_succ, ctxt2) ->
-      if PrevM.mem ctxt2 acc then acc
-      else
-        let p = States.find_mem_opt (bb, ctxt2) states in
-        PrevM.add ctxt2 p acc)
-    PrevM.empty next
-in
-
-let wl'', states'' =
-  List.fold_left
-    (fun (w, s) ((succ : Basicblock.t), ctxt2) ->
-      let prev_mem_opt = PrevM.find ctxt2 prev_snapshot in
-      match prev_mem_opt with
-      | Some prev_mem ->
-          if AbsMem.(mem <= prev_mem) then (w, s)
-          else (
-            LoopCounter.update (bb, ctxt2);
-            let joined_mem = AbsMem.(join prev_mem mem) in
-            let widen_mem =
-              if LoopCounter.widen (bb, ctxt2) then AbsMem.widen prev_mem joined_mem
-              else joined_mem
-            in
-            (Worklist.add (succ, ctxt2) w, States.update (bb, ctxt2) widen_mem s))
-      | None ->
-          let w' = if mem = AbsMem.bot then w else Worklist.add (succ, ctxt2) w in
-          (w', States.update (bb, ctxt2) mem s))
-    (wl', states) next
-in
+        let wl'', states'' =
+          List.fold_left
+            (fun (w, s) ((succ : Basicblock.t), ctxt2) ->
+              let prev_mem = States.find_mem_opt (bb, ctxt2) states in
+              match prev_mem with
+              | Some prev_mem ->
+                  if AbsMem.(mem <= prev_mem) then (w, s)
+                  else (
+                    LoopCounter.update (bb, ctxt2);
+                    let joined_mem = AbsMem.(join prev_mem mem) in
+                    let widen_mem =
+                      if LoopCounter.widen (bb, ctxt2) then AbsMem.widen prev_mem joined_mem
+                      else joined_mem
+                    in
+                    (Worklist.add (succ, ctxt2) w, States.update (bb, ctxt2) widen_mem s))
+              | None ->
+                  let w' = if mem = AbsMem.bot then w else Worklist.add (succ, ctxt2) w in
+                  (w', States.update (bb, ctxt2) mem s))
+            (wl', states) next
+        in
         analyze' wl'' states''
     in
     let init_wl = Worklist.add (entry, Ctxt.empty ()) Worklist.empty in
