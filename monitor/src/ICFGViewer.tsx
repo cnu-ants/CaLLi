@@ -349,9 +349,32 @@ export default function ICFGViewer() {
     };
   }, []);
 
-  const sendCmd = (cmd: "play" | "pause" | "step") => {
-    sendWs({ cmd });
-  };
+  const resetUiForRestart = useCallback(() => {
+    setWl([]);
+    setCurrentBb("");
+    setCurrentCtxt("");
+    setCtxMap({});
+    setSelBb("");
+    setSelCtxt("");
+    setSelEntries([]);
+    setSelIsBot(false);
+    setEnvItems([]);
+    setSearchText("");
+    setActiveMatchIdx(0);
+  }, []);
+
+  const sendCmd = useCallback(
+    (cmd: "play" | "pause" | "step" | "restart") => {
+      if (cmd === "restart") {
+        resetUiForRestart();
+        sendWs({ cmd: "restart" });
+        syncBpsToServer(loadBpMap());
+        return;
+      }
+      sendWs({ cmd });
+    },
+    [resetUiForRestart]
+  );
 
   const onNodeClick = async (_: any, node: any) => {
     const bb = node.id as string;
@@ -677,7 +700,7 @@ export default function ICFGViewer() {
           width: LEFT_PANEL_W,
         }}
       >
-        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <button onClick={() => sendCmd("play")} disabled={wsStatus !== "connected"} style={{ fontSize: panelFont }}>
             Play
           </button>
@@ -686,6 +709,9 @@ export default function ICFGViewer() {
           </button>
           <button onClick={() => sendCmd("step")} disabled={wsStatus !== "connected"} style={{ fontSize: panelFont }}>
             Step
+          </button>
+          <button onClick={() => sendCmd("restart")} disabled={wsStatus !== "connected"} style={{ fontSize: panelFont }}>
+            Restart
           </button>
           <span style={{ marginLeft: 10 }}>ws={wsStatus}</span>
         </div>

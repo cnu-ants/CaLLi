@@ -1,3 +1,4 @@
+(* ../../src/analyzer/llvmWebAnalyzer.ml *)
 module F = Format
 
 module Make
@@ -12,6 +13,7 @@ struct
 
   type runtime = {
     entry : Basicblock.t;
+    init_states : States.t;
     mutable wl : Worklist.t;
     mutable states : States.t;
     mem_view : (string, (string * AbsMem.t) list) Hashtbl.t;
@@ -21,11 +23,20 @@ struct
   let init_runtime ~(entry : Basicblock.t) ~(init_states : States.t) : runtime =
     {
       entry;
+      init_states;
       wl = Worklist.add (entry, Ctxt.empty ()) Worklist.empty;
       states = init_states;
       mem_view = Hashtbl.create 256;
       last = None;
     }
+
+  let restart (r : runtime) : unit =
+    r.wl <- Worklist.add (r.entry, Ctxt.empty ()) Worklist.empty;
+    r.states <- r.init_states;
+    Hashtbl.clear r.mem_view;
+    r.last <- None;
+    summary := States.empty;
+    LoopCounter.lc := LoopCounter.empty
 
   let get_icfg_json () : string =
     Icfg.to_graph_json !llmodule !icfg |> Yojson.Safe.to_string

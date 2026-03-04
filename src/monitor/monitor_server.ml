@@ -1,3 +1,4 @@
+(* ../../src/monitor/monitor_server.ml *)
 open Lwt.Infix
 
 module type WEB_ANALYZER = sig
@@ -10,6 +11,8 @@ module type WEB_ANALYZER = sig
   val snapshot_json : runtime -> Yojson.Safe.t
   val get_state_for_bb_json : runtime -> string -> Yojson.Safe.t
   val get_all_states_json : runtime -> Yojson.Safe.t
+
+  val restart : runtime -> unit
 end
 
 module Make (A : WEB_ANALYZER) =
@@ -20,6 +23,7 @@ struct
     | Play
     | Pause
     | Step
+    | Restart
     | BpSet of { bb : string; enabled : bool }
     | BpSync of { bbs : string list }
 
@@ -44,6 +48,7 @@ struct
          | "play" -> Some Play
          | "pause" -> Some Pause
          | "step" -> Some Step
+         | "restart" -> Some Restart
          | "bp_set" ->
              let bb = j |> member "bb" |> to_string in
              let enabled = j |> member "enabled" |> to_bool in
@@ -58,6 +63,7 @@ struct
       | "play" -> Some Play
       | "pause" -> Some Pause
       | "step" -> Some Step
+      | "restart" -> Some Restart
       | _ -> None
 
   let breakpoints_json (bps : SS.t) : Yojson.Safe.t =
@@ -88,6 +94,11 @@ struct
       let stop () =
         paused := true;
         req := None
+      in
+
+      let rec stop_and_wait () : unit Lwt.t =
+        stop ();
+        if !running then Lwt.pause () >>= stop_and_wait else Lwt.return_unit
       in
 
       let max_steps_per_slice = 2000 in
@@ -158,12 +169,15 @@ struct
             request_run Continue;
             Lwt.return_unit
         | Pause ->
-            paused := true;
-            req := None;
+            stop ();
             Lwt.return_unit
         | Step ->
             request_run (Budget 1);
             Lwt.return_unit
+        | Restart ->
+            stop_and_wait () >>= fun () ->
+            A.restart runtime;
+            send_json (add_meta (A.snapshot_json runtime) ~ran:0 ~reason:"restart")
         | BpSet { bb; enabled } ->
             bps := (if enabled then SS.add bb !bps else SS.remove bb !bps);
             send_json (breakpoints_json !bps)
