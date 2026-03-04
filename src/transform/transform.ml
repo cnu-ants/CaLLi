@@ -281,7 +281,11 @@ let transform_term term func_name bb_name: Term.t =
       succ1=(transform_e (Llvm.operand term 1) func_name)}
     | false -> Term.Br 
       {bb_name=bb_name; succ=transform_e (Llvm.operand term 0) func_name})
-  | Llvm.Opcode.Ret -> Term.Ret {bb_name=bb_name; ret=(transform_e (Llvm.operand term 0) func_name)}
+  | Llvm.Opcode.Ret -> 
+      if (Llvm.num_operands term) = 0 then 
+        Term.Ret {bb_name=bb_name; ret=(Expr.Void {ty=Type.Void})}
+      else 
+        Term.Ret {bb_name=bb_name; ret=(transform_e (Llvm.operand term 0) func_name)}
   | Llvm.Opcode.Switch -> Term.Switch 
     {bb_name=bb_name;
     cond=(transform_e (Llvm.operand term 0) func_name);
@@ -406,6 +410,7 @@ let transform_cfg llf : Cfg.t =
 let transform_func llf (*: Function.t*) =
   let _ = Format.printf "transform_func@." in
   let func_name = get_fname llf in
+  let _ = Format.printf "transform_func Debug 1@." in
   let exit_bb = transform_bbpool llf in
   let cfg = transform_cfg llf in
   let cfg, entry_name =
@@ -423,6 +428,7 @@ let transform_func llf (*: Function.t*) =
   in
   let func : Function.t = {function_name=func_name; cfg=cfg; params=params; metadata=Empty; entry=entry_name; exit=exit_bb.bb_name} in
   let meta = Transform_meta.make_alias func in
+  let _ = Format.printf "transform_func Done@." in
   {func with metadata=meta}
 
 
