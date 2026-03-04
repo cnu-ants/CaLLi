@@ -24,6 +24,7 @@ let () =
   let _ = Init.transform_prune () in
   let _ = Init.make_llm () in
   let _ = Init.make_call_graph () in
+  let _ = Format.printf "Transform Done@." in
   ()
 
 module Ctxt =
@@ -44,8 +45,11 @@ module Web =
   Monitor_server.Make (struct
     type runtime = Analyzer.runtime
     let get_icfg_json = Analyzer.get_icfg_json
-    let step_once_json = Analyzer.step_once_json
+    type step_ev = Analyzer.step_ev = Done | Stepped of string
+    let step_once = Analyzer.step_once
+    let snapshot_json = Analyzer.snapshot_json
     let get_state_for_bb_json = Analyzer.get_state_for_bb_json
+    let get_all_states_json = Analyzer.get_all_states_json
   end)
 
 let () =
@@ -61,7 +65,6 @@ let () =
 
   let llm = Init.m () in
   let init_mem = Analyzer.init llm in
-
   let target_f : Function.t = Module.find target (Init.llmodule ()) in
   let entry = Bbpool.find target_f.entry !Bbpool.pool in
 

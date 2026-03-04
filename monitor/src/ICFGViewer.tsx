@@ -8,9 +8,20 @@ type NodeJSON = { id: string; label?: string; instrs?: string[] };
 type EdgeJSON = { id: string; source: string; target: string; kind?: "call" | "fallback" | "ret" | "intra" };
 type GraphJSON = { nodes: NodeJSON[]; edges: EdgeJSON[] };
 
+type WorklistMsg = {
+  type: "worklist";
+  bb: string;
+  ctxt: string;
+  current: string;
+  worklist: string[];
+  ran?: number;
+  reason?: string;
+};
+
 type WLMsg =
-  | { type: "worklist"; bb: string; ctxt: string; current: string; worklist: string[] }
-  | { type: "done" }
+  | WorklistMsg
+  | { type: "done"; ran?: number; reason?: string }
+  | { type: "breakpoints"; bbs: string[] }
   | { type: "error"; msg: string };
 
 type StateResp = {
@@ -18,24 +29,24 @@ type StateResp = {
   contexts: { ctxt: string; is_bot: boolean; entries: { addr: string; value: string }[] }[];
 };
 
+type StatesResp = { items: StateResp[] };
+
 type EnvResp = { items: { var: string; addr: string }[] };
 
 const NODE_W = 420;
 
-// UI scale (panels)
 const UI_SCALE = 1.5;
-
-// Graph scale (node content font)
 const NODE_SCALE = 1.25;
 
 const NODE_TITLE_FS = Math.round(15 * NODE_SCALE);
 const NODE_BODY_FS = Math.round(13 * NODE_SCALE);
 const NODE_LINE_H = Math.round(16 * NODE_SCALE);
 
-// Bigger ctxt buttons
 const CTX_BTN_FS = Math.round(12 * NODE_SCALE * 1.15);
 const CTX_BTN_PAD_Y = Math.round(4 * NODE_SCALE * 1.2);
 const CTX_BTN_PAD_X = Math.round(10 * NODE_SCALE * 1.2);
+
+const BP_LS_KEY = "calli_breakpoints_v1";
 
 function edgeStyle(kind: "call" | "fallback" | "ret" | "intra") {
   if (kind === "call") return { strokeWidth: 2.5, stroke: "#2563eb" };
@@ -46,7 +57,7 @@ function edgeStyle(kind: "call" | "fallback" | "ret" | "intra") {
 
 function computeNodeHeight(instrsLen: number) {
   const header = 44 * NODE_SCALE;
-  const ctxArea = 52 * NODE_SCALE; // slightly taller for bigger buttons
+  const ctxArea = 52 * NODE_SCALE;
   const padding = 28 * NODE_SCALE;
   const termExtra = 16 * NODE_SCALE;
   const lines = Math.max(1, instrsLen);
@@ -82,6 +93,23 @@ function layout(nodes: Node[], edges: Edge[]) {
   return { nodes: laidOut, edges };
 }
 
+function loadBpMap(): Record<string, boolean> {
+  try {
+    const s = localStorage.getItem(BP_LS_KEY);
+    if (!s) return {};
+    const j = JSON.parse(s) as Record<string, boolean>;
+    return j && typeof j === "object" ? j : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveBpMap(m: Record<string, boolean>) {
+  try {
+    localStorage.setItem(BP_LS_KEY, JSON.stringify(m));
+  } catch {}
+}
+
 export default function ICFGViewer() {
   const [graph, setGraph] = useState<GraphJSON | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -97,12 +125,14 @@ export default function ICFGViewer() {
 
   const [ctxMap, setCtxMap] = useState<Record<string, StateResp["contexts"]>>({});
 
-  const [selBb, setSelBb] = useState<string>(""); // selected node (blue)
+  const [selBb, setSelBb] = useState<string>("");
   const [selCtxt, setSelCtxt] = useState<string>("");
   const [selEntries, setSelEntries] = useState<{ addr: string; value: string }[]>([]);
   const [selIsBot, setSelIsBot] = useState<boolean>(false);
 
   const [envItems, setEnvItems] = useState<{ var: string; addr: string }[]>([]);
+
+  const [bpMap, setBpMap] = useState<Record<string, boolean>>(() => loadBpMap());
 
   useEffect(() => {
     fetch("/icfg")
@@ -126,6 +156,18 @@ export default function ICFGViewer() {
     const j = (await r.json()) as StateResp;
     setCtxMap((prev) => ({ ...prev, [bb]: j.contexts }));
     return j.contexts;
+  };
+
+  const fetchAllStates = async () => {
+    const r = await fetch("/states");
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = (await r.json()) as StatesResp;
+    const items = Array.isArray(j.items) ? j.items : [];
+    setCtxMap((prev) => {
+      const next = { ...prev };
+      for (const it of items) next[it.bb] = it.contexts;
+      return next;
+    });
   };
 
   const fetchEnv = async () => {
@@ -182,6 +224,26 @@ export default function ICFGViewer() {
     (rfInstance as any).setViewport(nextViewport, { duration: 250 });
   };
 
+  const sendWs = (obj: any) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify(obj));
+  };
+
+  const syncBpsToServer = (m: Record<string, boolean>) => {
+    const bbs = Object.keys(m).filter((k) => m[k]);
+    sendWs({ cmd: "bp_sync", bbs });
+  };
+
+  const setBreakpoint = (bb: string, enabled: boolean) => {
+    setBpMap((prev) => {
+      const next = { ...prev, [bb]: enabled };
+      saveBpMap(next);
+      sendWs({ cmd: "bp_set", bb, enabled });
+      return next;
+    });
+  };
+
   useEffect(() => {
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
     const wsUrl = `${proto}://${window.location.host}/ws`;
@@ -190,31 +252,68 @@ export default function ICFGViewer() {
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
-    ws.onopen = () => setWsStatus("connected");
+    ws.onopen = () => {
+      setWsStatus("connected");
+      syncBpsToServer(loadBpMap());
+    };
     ws.onclose = () => setWsStatus("disconnected");
     ws.onerror = () => setWsStatus("disconnected");
 
     ws.onmessage = async (ev) => {
+  try {
+    const msg = JSON.parse(ev.data) as WLMsg;
+
+    if (msg.type === "breakpoints") {
+      const serverMap: Record<string, boolean> = {};
+      for (const bb of msg.bbs || []) serverMap[bb] = true;
+      saveBpMap(serverMap);
+      setBpMap(serverMap);
+      return;
+    }
+
+    if (msg.type === "done") {
+      // analysis finished: do a final global refresh
       try {
-        const msg = JSON.parse(ev.data) as WLMsg;
-        if (msg.type === "worklist") {
-          setCurrentBb(msg.bb);
-          setCurrentCtxt(msg.ctxt);
-          setWl(msg.worklist);
+        await fetchAllStates();
+      } catch {}
 
-          try {
-            const contexts = await fetchStatesForBb(msg.bb);
-            // keep selected bb as-is; but if nothing selected yet, default-select current bb
-            setSelBb((prev) => (prev ? prev : msg.bb));
-            selectBestContext(msg.bb, contexts, msg.ctxt);
-          } catch {}
+      try {
+        await fetchEnv();
+      } catch {}
 
-          try {
-            await fetchEnv();
-          } catch {}
+      // worklist is empty now
+      setWl([]);
+      // keep currentBb/currentCtxt as last known (optional)
+      return;
+    }
+
+    if (msg.type === "worklist") {
+      setCurrentBb(msg.bb);
+      setCurrentCtxt(msg.ctxt);
+      setWl(msg.worklist);
+
+      const ran = typeof msg.ran === "number" ? msg.ran : 0;
+
+      // if we jumped more than 1 step (Play), refresh all blocks once
+      try {
+        if (ran > 1) {
+          await fetchAllStates();
         }
       } catch {}
-    };
+
+      // ensure current block is present (also covers ran <= 1)
+      try {
+        const contexts = await fetchStatesForBb(msg.bb);
+        setSelBb((prev) => (prev ? prev : msg.bb));
+        selectBestContext(msg.bb, contexts, msg.ctxt);
+      } catch {}
+
+      try {
+        await fetchEnv();
+      } catch {}
+    }
+  } catch {}
+};
 
     return () => {
       ws.close();
@@ -223,15 +322,11 @@ export default function ICFGViewer() {
   }, []);
 
   const sendCmd = (cmd: "play" | "pause" | "step") => {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(cmd);
+    sendWs({ cmd });
   };
 
   const onNodeClick = async (_: any, node: any) => {
     const bb = node.id as string;
-
-    // Blue select + center
     setSelBb(bb);
 
     try {
@@ -243,11 +338,6 @@ export default function ICFGViewer() {
       setSelEntries([]);
       setSelIsBot(false);
     }
-
-    // center after selection (uses current layout nodes)
-    // will be called again by effect if needed
-    // (safe even if not found)
-    // eslint-disable-next-line @typescript-eslint/no-use-before-define
   };
 
   const chooseContext = (bb: string, ctxt: string) => {
@@ -268,6 +358,7 @@ export default function ICFGViewer() {
       const instrs = Array.isArray(n.instrs) ? n.instrs : [];
       const isCurrent = currentBb !== "" && n.id === currentBb;
       const isSelected = selBb !== "" && n.id === selBb;
+      const isBp = !!bpMap[n.id];
 
       const contexts = ctxMap[n.id] ?? [];
       const ctxButtons =
@@ -284,10 +375,7 @@ export default function ICFGViewer() {
                 }}
                 style={{
                   fontSize: CTX_BTN_FS,
-                  border:
-                    c.ctxt === selCtxt && n.id === selBb
-                      ? "3px solid #ef4444"
-                      : "2px solid #d1d5db",
+                  border: c.ctxt === selCtxt && n.id === selBb ? "3px solid #ef4444" : "2px solid #d1d5db",
                   borderRadius: 8,
                   padding: `${CTX_BTN_PAD_Y}px ${CTX_BTN_PAD_X}px`,
                   background: "#fff",
@@ -304,12 +392,20 @@ export default function ICFGViewer() {
 
       const h = computeNodeHeight(instrs.length);
 
-      // Border priority: current(red) > selected(blue) > default
-      const border = isCurrent ? "3px solid #ef4444" : isSelected ? "3px solid #2563eb" : "1px solid #111827";
+      const border = isCurrent
+        ? "3px solid #ef4444"
+        : isSelected
+        ? "3px solid #2563eb"
+        : isBp
+        ? "3px solid #f59e0b"
+        : "1px solid #111827";
+
       const shadow = isCurrent
         ? "0 0 0 3px rgba(239,68,68,0.15)"
         : isSelected
         ? "0 0 0 3px rgba(37,99,235,0.12)"
+        : isBp
+        ? "0 0 0 3px rgba(245,158,11,0.12)"
         : "none";
 
       return {
@@ -319,14 +415,48 @@ export default function ICFGViewer() {
             <div style={{ fontFamily: "monospace", textAlign: "left" }}>
               <div
                 style={{
-                  fontSize: NODE_TITLE_FS,
-                  fontWeight: 700,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 10,
                   marginBottom: 10,
-                  wordBreak: "break-all",
-                  textAlign: "left",
                 }}
               >
-                {label}
+                <div
+                  style={{
+                    fontSize: NODE_TITLE_FS,
+                    fontWeight: 700,
+                    wordBreak: "break-all",
+                    textAlign: "left",
+                    flex: 1,
+                  }}
+                >
+                  {label}
+                </div>
+
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    fontSize: NODE_BODY_FS,
+                    userSelect: "none",
+                    whiteSpace: "nowrap",
+                  }}
+                  onClick={(ev) => ev.stopPropagation()}
+                  title="Breakpoint"
+                >
+                  <input
+                    type="checkbox"
+                    checked={isBp}
+                    onChange={(ev) => {
+                      ev.stopPropagation();
+                      setBreakpoint(n.id, ev.target.checked);
+                    }}
+                    onClick={(ev) => ev.stopPropagation()}
+                  />
+                  bp
+                </label>
               </div>
 
               <div style={{ marginBottom: 12, textAlign: "left" }}>{ctxButtons}</div>
@@ -365,15 +495,13 @@ export default function ICFGViewer() {
     });
 
     return layout(nodes, edges);
-  }, [graph, currentBb, selBb, ctxMap, selCtxt]);
+  }, [graph, currentBb, selBb, ctxMap, selCtxt, bpMap]);
 
-  // Center when CURRENT changes (red)
   useEffect(() => {
     if (!rfInstance || !currentBb) return;
     centerNodeBetweenPanels(currentBb, rf.nodes);
   }, [rfInstance, currentBb, rf.nodes]);
 
-  // Center when SELECTED changes (blue)
   useEffect(() => {
     if (!rfInstance || !selBb) return;
     centerNodeBetweenPanels(selBb, rf.nodes);
@@ -398,9 +526,10 @@ export default function ICFGViewer() {
   const LEFT_PANEL_W = Math.round(430 * UI_SCALE);
   const RIGHT_PANEL_W = Math.round(820 * UI_SCALE);
 
+  const bpList = Object.keys(bpMap).filter((k) => bpMap[k]);
+
   return (
     <div style={{ width: "100vw", height: "100vh" }}>
-      {/* left control panel */}
       <div
         style={{
           position: "fixed",
@@ -434,8 +563,40 @@ export default function ICFGViewer() {
           <div style={{ fontSize: panelSmall, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
             {currentBb ? `${currentBb} / ${currentCtxt}` : "(none)"}
           </div>
-          <div style={{ marginTop: 8, fontSize: panelSmall }}>
-            Selected: {selBb ? selBb : "(none)"}
+          <div style={{ marginTop: 8, fontSize: panelSmall }}>Selected: {selBb ? selBb : "(none)"}</div>
+        </div>
+
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontWeight: 700 }}>Breakpoints</div>
+          <div
+            style={{
+              marginTop: 8,
+              maxHeight: Math.round(120 * UI_SCALE),
+              overflow: "auto",
+              border: "1px solid #e5e7eb",
+              borderRadius: 8,
+              padding: Math.round(8 * UI_SCALE),
+              fontSize: panelSmall,
+              lineHeight: 1.25,
+            }}
+          >
+            {bpList.length === 0 ? (
+              <div>(none)</div>
+            ) : (
+              bpList.map((x) => (
+                <div key={x} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "4px 0" }}>
+                  <span style={{ wordBreak: "break-all" }}>{x}</span>
+                  <button
+                    style={{ fontSize: panelSmall }}
+                    onClick={() => setBreakpoint(x, false)}
+                    disabled={wsStatus !== "connected"}
+                    title="Remove breakpoint"
+                  >
+                    x
+                  </button>
+                </div>
+              ))
+            )}
           </div>
         </div>
 
@@ -466,7 +627,6 @@ export default function ICFGViewer() {
         </div>
       </div>
 
-      {/* right panel */}
       <div
         style={{
           position: "fixed",

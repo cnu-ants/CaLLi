@@ -11,10 +11,23 @@ define dso_local i32 @foo(i32 noundef %0) #0 {
   %3 = alloca i32, align 4
   store i32 %0, ptr %2, align 4
   %4 = load i32, ptr %2, align 4
-  %5 = call i32 @bar(i32 noundef %4)
-  store i32 %5, ptr %3, align 4
+  store i32 %4, ptr %3, align 4
+  br label %5
+
+5:                                                ; preds = %8, %1
   %6 = load i32, ptr %3, align 4
-  ret i32 %6
+  %7 = icmp slt i32 %6, 45
+  br i1 %7, label %8, label %11
+
+8:                                                ; preds = %5
+  %9 = load i32, ptr %3, align 4
+  %10 = call i32 @bar(i32 noundef %9)
+  store i32 %10, ptr %3, align 4
+  br label %5, !llvm.loop !6
+
+11:                                               ; preds = %5
+  %12 = load i32, ptr %3, align 4
+  ret i32 %12
 }
 
 ; Function Attrs: noinline nounwind optnone uwtable
@@ -52,3 +65,5 @@ attributes #1 = { "frame-pointer"="all" "no-trapping-math"="true" "stack-protect
 !3 = !{i32 7, !"uwtable", i32 2}
 !4 = !{i32 7, !"frame-pointer", i32 2}
 !5 = !{!"Ubuntu clang version 18.1.3 (1ubuntu1)"}
+!6 = distinct !{!6, !7}
+!7 = !{!"llvm.loop.mustprogress"}

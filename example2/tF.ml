@@ -379,7 +379,7 @@ let abs_interp_global (v : Global.t) mem =
 
 
 let transfer (bb : Basicblock.t) (mem : AbsMemory.t)  =
-    let _ = Format.printf "TF : %s@." bb.bb_name in 
+    let _ = Format.printf "TF1 : %s@." bb.bb_name in 
     let mem' = List.fold_left
     (fun mem stmt ->
         let mem'' = abs_interp_stmt stmt mem in
@@ -387,5 +387,11 @@ let transfer (bb : Basicblock.t) (mem : AbsMemory.t)  =
     )
     mem bb.stmts 
     in
-    let mem' = abs_interp_term' bb.term mem' in
+    let _ = Format.printf "TF2 : %s@." bb.bb_name in 
+    let mem' = 
+      match bb.term with
+      | Some term ->  abs_interp_term' term mem' 
+      | None -> mem'
+    in
+    let _ = Format.printf "TF3 : %s@." bb.bb_name in 
     mem'
