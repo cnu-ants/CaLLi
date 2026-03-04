@@ -8,8 +8,17 @@ struct
   let add = M.add
   let iter = M.iter
   let fold = M.fold
+  
+  let pp _ icfg =
+    M.iter
+      (fun k v ->
+        let _ = Format.printf "%s -> " k in
+        let _ = List.iter (fun s -> Format.printf "%s ," s) v in
+        Format.printf "\n")
+      icfg
 
   let make (m : Function.t Module.M.t) : t =
+    let _ = Format.printf "Make@." in
     let icfg =
       Module.fold
         (fun _ (func : Function.t) icfg -> M.union (fun _ s1 _ -> Some s1) icfg func.cfg)
@@ -20,20 +29,25 @@ struct
         (fun bb_name _ icfg ->
           let bb = Bbpool.find bb_name !Bbpool.pool in
           match bb.term with
-          | CallSite { callee; _ } ->
+          | Some CallSite { callee; _ } ->
               let f = Module.find bb.func_name m in
+              let f_callee = Module.find_opt callee m in
               let icfg =
-                if Bbpool.mem (callee ^ "#entry") !Bbpool.pool then
-                  add bb_name ((callee ^ "#entry") :: (M.find bb_name f.cfg)) icfg
-                else icfg
-              in
-              let next = List.nth (Cfg.next bb f.cfg) 0 in
-              if Bbpool.mem (callee ^ "#exit") !Bbpool.pool then
-                add (callee ^ "#exit") (next.bb_name :: (M.find (callee ^ "#exit") icfg)) icfg
-              else icfg
+                (match f_callee with
+                | Some f_callee -> 
+                   let icfg' = add bb_name (f_callee.entry :: (M.find bb_name f.cfg)) icfg in
+                   let next = List.nth (Cfg.next bb f.cfg) 0 in
+                   if Bbpool.mem f_callee.exit !Bbpool.pool then
+                     add f_callee.exit (next.bb_name :: (M.find f_callee.exit icfg')) icfg'
+                   else icfg'
+                | None -> icfg
+                )
+             in icfg
           | _ -> icfg)
         icfg icfg
     in
+    let _ = Format.printf "ICFG : %a" pp icfg in
+    let _ = Format.printf "ICFG END@." in
     icfg
 
   let preds_intra (bb : Basicblock.t) _ m : Basicblock.t list =
@@ -67,7 +81,7 @@ struct
     let bb_list = M.find bb.bb_name icfg |> List.map (fun b -> Bbpool.find b !Bbpool.pool) in
     let next_bb_list =
       match bb.term with
-      | CallSite _ ->
+      | Some CallSite _ ->
           let fallbacks = next_fallback bb m in
           List.filter_map (fun v -> if List.mem v fallbacks then None else Some v) bb_list
       | _ -> bb_list
@@ -78,13 +92,6 @@ struct
       let fallbacks = next_fallback bb m in
       List.map (fun v -> (v, ctxt)) fallbacks
 
-  let pp _ icfg =
-    M.iter
-      (fun k v ->
-        let _ = Format.printf "%s -> " k in
-        let _ = List.iter (fun s -> Format.printf "%s ," s) v in
-        Format.printf "\n")
-      icfg
 
   (* ---------- JSON helpers: instruction rendering without using Basicblock.pp/Inst.pp/Term.pp ---------- *)
 
@@ -157,13 +164,15 @@ struct
 
   let bb_instrs (bb : Basicblock.t) : string list =
     let stmt_lines = bb.stmts |> List.map (fun (s : Stmt.t) -> inst_to_string s.inst) in
-    stmt_lines @ [ term_to_string bb.term ]
+    match bb.term with
+    | Some term -> stmt_lines @ [ term_to_string term ]
+    | None -> stmt_lines
 
   (* Edge kind classification *)
   let edge_kind_of (m : Function.t Module.M.t) ~(from_id : string) ~(to_id : string) : string =
     let from_bb = Bbpool.find from_id !Bbpool.pool in
     match from_bb.term with
-    | CallSite { callee; _ } ->
+    | Some CallSite { callee; _ } ->
         let f = Module.find from_bb.func_name m in
         let fallbacks = Cfg.next from_bb f.cfg |> List.map (fun (b:Basicblock.t) -> b.bb_name) in
         if String.equal to_id (callee ^ "#entry") then "call"

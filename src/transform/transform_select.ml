@@ -25,7 +25,7 @@ let transform_cfg (cfg : Cfg.t) : Cfg.t =
                           } in 
         let new_bb1 : Basicblock.t = 
           {bb with stmts=(List.filter (fun (stmt' : Stmt.t) -> if stmt'.index < stmt.index then true else false) bb.stmts)@[alloca]; 
-                   term=br_term;
+                   term=Some br_term;
                    bb_name=bb_name} in
         let new_bb2 : Basicblock.t = 
           {bb with stmts=load::(List.filter (fun (stmt' : Stmt.t) -> if stmt'.index > stmt.index then true else false) bb.stmts);
@@ -33,10 +33,10 @@ let transform_cfg (cfg : Cfg.t) : Cfg.t =
           } in
         let select_bb1 : Basicblock.t = {bb with bb_name=bb_name1;
                           stmts=[store1];
-                          term=Br {bb_name=bb_name1; succ=(Name {ty=Label; name=bb_name3})}} in
+                          term=Some(Br {bb_name=bb_name1; succ=(Name {ty=Label; name=bb_name3})})} in
         let select_bb2 : Basicblock.t = {bb with bb_name=bb_name2;
                           stmts=[store2];
-                          term=Br {bb_name=bb_name2; succ=(Name {ty=Label; name=bb_name3})}}  in
+                          term=Some(Br {bb_name=bb_name2; succ=(Name {ty=Label; name=bb_name3})})}  in
         let _ = Bbpool.pool := Bbpool.add bb_name new_bb1 !Bbpool.pool in 
         let _ = Bbpool.pool := Bbpool.add bb_name1 select_bb1 !Bbpool.pool in 
         let _ = Bbpool.pool := Bbpool.add bb_name2 select_bb2 !Bbpool.pool in 
@@ -58,7 +58,8 @@ let transform_cfg (cfg : Cfg.t) : Cfg.t =
 
 let transform_func (func : Function.t) : Function.t =
   let cfg = transform_cfg func.cfg in
-  let f : Function.t = {function_name=func.function_name; cfg=cfg; params=func.params; metadata=func.metadata; entry=func.entry} in
+  let f : Function.t = {function_name=func.function_name; cfg=cfg; params=func.params; metadata=func.metadata; 
+    entry=func.entry; exit=func.exit} in
   f
 
 

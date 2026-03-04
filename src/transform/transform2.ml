@@ -36,7 +36,7 @@ let split (bb : Basicblock.t) (st_list : st list) : string list =
       | S stmt -> (name_list, lst@[stmt], i)
       | T term -> 
         let new_name = if i = 0 then bb.bb_name else bb.bb_name^"#"^(string_of_int i) in
-        let new_bb : Basicblock.t = {func_name=bb.func_name; bb_name = new_name; stmts = lst; term = term; loc=bb.loc} in
+        let new_bb : Basicblock.t = {func_name=bb.func_name; bb_name = new_name; stmts = lst; term = Some term; loc=bb.loc} in
         let _ = Bbpool.pool := (Bbpool.add new_name new_bb !Bbpool.pool) in
         (name_list@[new_name], [], i+1)
     )
@@ -50,8 +50,11 @@ let split (bb : Basicblock.t) (st_list : st list) : string list =
 let transform_call_pool bb_name : String.t * String.t list =
   let bb = Bbpool.find bb_name !Bbpool.pool in
   let st_list = transform_call_stmt bb.stmts in
-  let st_list = st_list@[T bb.term] in
-
+  let st_list = 
+    match bb.term with
+    | Some term -> st_list@[T term]
+    | None -> st_list
+  in
   let new_bb_list = split bb st_list in
   (bb_name, new_bb_list)
 
@@ -102,7 +105,8 @@ let transform_call_cfg (cfg : Cfg.t) : Cfg.t =
 
 let transform_call_func (func : Function.t) : Function.t =
   let cfg = transform_call_cfg func.cfg in
-  let f : Function.t = {function_name=func.function_name; cfg=cfg; params=func.params; metadata=func.metadata; entry=func.entry} in
+  let f : Function.t = {function_name=func.function_name; cfg=cfg; params=func.params; metadata=func.metadata; 
+    entry=func.entry; exit=func.exit;} in
   f
 
 

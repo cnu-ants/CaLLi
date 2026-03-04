@@ -20,6 +20,7 @@
   let add = M.add
   let fold = M.fold
   let iter = M.iter
+  let find_opt = M.find_opt
 
   let main m = 
     let t = 

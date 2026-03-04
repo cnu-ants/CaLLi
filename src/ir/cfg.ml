@@ -15,7 +15,7 @@ let fold = M.fold
 let iter = M.iter
 let map = M.map
 let mem = M.mem
-
+let remove = M.remove
 
 (* The next function returns the successors of a basic block as a list in the CFG.  *)
 let next (bb : Basicblock.t) (cfg : t) : Basicblock.t list =

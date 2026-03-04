@@ -60,7 +60,7 @@ let make_call_graph (m : Module.t) : t =
         (fun bb_name _ g -> 
           let bb = Bbpool.find bb_name !Bbpool.pool in
           match bb.term with 
-          | CallSite {callee; _} -> 
+          | Some CallSite {callee; _} -> 
             let elt1 : elt = find func_name g in
             let g = add func_name {calling=callee::elt1.calling; called=elt1.called} g in
             let elt2 : elt = find callee g in

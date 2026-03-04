@@ -338,7 +338,7 @@ let transform_bb llbb func_name : Basicblock.t =
     | _ -> failwith "Unreachable"
   in
   {func_name=func_name; bb_name=bb_name; stmts=stmt_list; 
-  term=term; loc=(get_bbname (Llvm.value_of_block llbb))}
+  term=Some term; loc=(get_bbname (Llvm.value_of_block llbb))}
 
     
 let transform_bbpool llf =
@@ -355,9 +355,17 @@ let transform_bbpool llf =
   in
   let exit_bb : Basicblock.t = 
     {func_name=func_name; bb_name=func_name^"#exit"; 
-    stmts=[]; term=Exit {bb_name=func_name^"#exit";}; loc=""} in 
+    stmts=[]; term=Some (Exit {bb_name=func_name^"#exit";}); loc=""} in 
   let _ = Bbpool.pool := Bbpool.add (func_name^"#exit") exit_bb !Bbpool.pool in
-  ()
+  let _ =
+    if Array.length (Llvm.basic_blocks llf) = 0 then 
+      let entry_bb : Basicblock.t = 
+        {func_name=func_name; bb_name=func_name^"#entry"; stmts=[]; 
+        term=Some (Br {bb_name=func_name^"#entry"; succ=Expr.Name {ty=Label; name=exit_bb.bb_name}}); loc=""} in 
+      let _ = Bbpool.pool := Bbpool.add (func_name^"#entry") entry_bb !Bbpool.pool in ()
+    else ()
+  in
+  exit_bb
 
 
 let transform_cfg llf : Cfg.t =
@@ -398,13 +406,14 @@ let transform_cfg llf : Cfg.t =
 let transform_func llf (*: Function.t*) =
   let _ = Format.printf "transform_func@." in
   let func_name = get_fname llf in
-  let _ = transform_bbpool llf in
+  let exit_bb = transform_bbpool llf in
   let cfg = transform_cfg llf in
-  let entry_name =
-    if Array.length (Llvm.basic_blocks llf) = 0 then ""
+  let cfg, entry_name =
+    if Array.length (Llvm.basic_blocks llf) = 0 then
+      (Cfg.add (func_name^"#entry") [exit_bb.bb_name] cfg, func_name^"#entry")
     else
       let entry = Llvm.entry_block llf in
-      func_name^"#"^(get_bbname (Llvm.value_of_block entry))
+      cfg, func_name^"#"^(get_bbname (Llvm.value_of_block entry))
   in
   let llparams = Llvm.params llf in
   let params = Array.fold_left 
@@ -412,7 +421,7 @@ let transform_func llf (*: Function.t*) =
       let p = transform_e param func_name in params'@[p]) 
     [] llparams 
   in
-  let func : Function.t = {function_name=func_name; cfg=cfg; params=params; metadata=Empty; entry=entry_name} in
+  let func : Function.t = {function_name=func_name; cfg=cfg; params=params; metadata=Empty; entry=entry_name; exit=exit_bb.bb_name} in
   let meta = Transform_meta.make_alias func in
   {func with metadata=meta}
 

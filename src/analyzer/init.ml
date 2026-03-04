@@ -55,6 +55,11 @@ let transform_prune () =
   let _ = mm := Some (Transform3.add_prune_node (m ())) in 
   m ()
 
+let transform_stmt2bb () = 
+  let _ = mm := Some (Transform_stmt2bb.transform_stmt2bb (m ())) in 
+  m ()
+
+
 let make_call_graph () = 
   let _ = cg := Some (CallGraph.make_call_graph (m ())) in 
   ()

@@ -1,4 +1,4 @@
-type t = {function_name : string; cfg : Cfg.t; params : Expr.t list; metadata : Metadata.t; entry : string}
+type t = {function_name : string; cfg : Cfg.t; params : Expr.t list; metadata : Metadata.t; entry : string; exit : string;}
 
 (*
 module Visit = Set.Make(String)

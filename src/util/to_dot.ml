@@ -14,7 +14,10 @@ let bb_to_node (bb : Basicblock.t): Dot.Node_Stmt.t =
   in 
   let loc = if bb.loc = "" then "" else "(loc:%"^bb.loc^")" in
   let body = bb.bb_name^loc^" :\\l"^body in
-  let body = body^(Format.asprintf "%a\\l" Term.pp bb.term) in
+  let body = match bb.term with 
+    | Some term -> body^(Format.asprintf "%a\\l" Term.pp term)
+    | None -> body
+  in
   let label : Dot.Attr.t =  Label (body) in
   let shape : Dot.Attr.t = Shape (Record) in
   let style : Dot.Attr.t = Style (Filled) in

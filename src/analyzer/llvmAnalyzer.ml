@@ -76,6 +76,7 @@ struct
 
   let init (llm : Module.t) : AbsMem.t =
     init_module_and_icfg llm;
+                          let _ = Format.printf "test2@." in
     List.fold_left
       (fun mem (v : Global.t) -> TF.abs_interp_global v mem)
       AbsMem.empty llm.globals

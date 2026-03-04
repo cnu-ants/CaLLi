@@ -53,9 +53,9 @@ module Make(Elt : Elt) =
     let apply (current_bb : Basicblock.t) (next_bb_list : Basicblock.t list) 
       current_ctxt _ = 
       match current_bb.term with
-      | CallSite _ ->
+      | Some CallSite _ ->
         List.map (fun bb -> (bb, push current_bb.bb_name current_ctxt)) next_bb_list 
-      | Exit _ ->        
+      | Some Exit _ ->        
         if !size = 0 then List.map (fun bb -> (bb, current_ctxt)) next_bb_list
         else
           if (length current_ctxt) = 0 then []

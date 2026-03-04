@@ -7,7 +7,7 @@ in LLVM IR
  - loc : The name of the basic block in LLVM IR. 
 
  **)
-type t = {func_name:string; bb_name : string; stmts : Stmt.t list; term : Term.t; loc : string}
+type t = {func_name:string; bb_name : string; stmts : Stmt.t list; term : Term.t option; loc : string}
   
 let pp ppf (bb : t) =
   let _ = Format.fprintf ppf "<%s> (loc:%s)\n" bb.bb_name bb.loc in
@@ -16,4 +16,7 @@ let pp ppf (bb : t) =
     (fun (stmt : Stmt.t) -> Format.fprintf ppf "%a\n" Inst.pp stmt.inst)
     bb.stmts
   in
-  Format.fprintf ppf "%a" Term.pp bb.term
+  match bb.term with
+  | Some term -> Format.fprintf ppf "%a" Term.pp term
+  | None -> ()
+
