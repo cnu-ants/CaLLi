@@ -12,6 +12,17 @@ module F = Format
     
     let to_string x = Z.to_string x
 
+    let is_singleton n : bool =
+      match n with 
+      | IntSet s -> S.cardinal s = 1
+      | _ -> false
+
+    let extract_value_string (s : t) : string option =
+      match s with
+      | IntSet set when S.cardinal set = 1 ->
+          Some (Z.to_string (S.min_elt set))
+      | _ -> None
+
     let fold f s init = 
       match s with
       | IntTop -> S.fold f (S.empty) init 
@@ -78,7 +89,7 @@ module F = Format
         if s = S.empty then IntBot else IntSet s
       | IntBot, _ -> IntBot
       | _, IntBot -> IntBot
-      | _ -> IntBot
+      | _ -> IntTop
     
     let app_sle n1 n2 = 
       match n1, n2 with
@@ -88,7 +99,7 @@ module F = Format
         if s = S.empty then IntBot else IntSet s
       | IntBot, _ -> IntBot
       | _, IntBot -> IntBot
-      | _ -> IntBot
+      | _ -> IntTop
     
     let app_sge n1 n2 = 
       match n1, n2 with
@@ -98,7 +109,7 @@ module F = Format
         if s = S.empty then IntBot else IntSet s
       | IntBot, _ -> IntBot
       | _, IntBot -> IntBot
-      | _ -> IntBot
+      | _ -> IntTop
     
     let app_sgt n1 n2 = 
       match n1, n2 with
@@ -108,7 +119,7 @@ module F = Format
         if s = S.empty then IntBot else IntSet s
       | IntBot, _ -> IntBot
       | _, IntBot -> IntBot
-      | _ -> IntBot
+      | _ -> IntTop
 
     module CompOp = struct
       let (==) n1 n2 =
@@ -188,15 +199,14 @@ module F = Format
       | _ -> false
 
     let widen n1 n2 =
-      let _ = Format.printf "widen %a %a@." pp n1 pp n2 in 
+      (*let _ = Format.printf "widen %a %a@." pp n1 pp n2 in *)
       let res = if n1 <= n2 then
           if n1 = n2 then n2
           else
-            let _ = Format.printf "widen2 %a %a@." pp n1 pp n2 in 
             IntTop
-        else join n1 n2
-      in
-      let _ = Format.printf "widen res %a@." pp res in res
+        else join n1 n2 in res
+      (*in
+      let _ = Format.printf "widen res %a@." pp res in res*)
 
 
     module BinOp = struct

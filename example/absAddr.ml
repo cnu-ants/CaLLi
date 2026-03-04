@@ -73,3 +73,13 @@ module F = Format
                     ) s in 
                     F.fprintf fmt " }"
 
+    let is_singleton a : bool =
+      match a with 
+      | AddrSet s -> S.cardinal s = 1
+      | _ -> false 
+    
+    let extract_value_string a : string option = 
+      match a with
+      | AddrSet s when not (S.is_empty s) -> 
+        Some (S.min_elt s)
+      | _ -> None

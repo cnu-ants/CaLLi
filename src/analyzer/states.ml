@@ -18,13 +18,15 @@ module type S =
     (* val find : KeyType.t -> t ->  *)
     val find_mem :  Basicblock.t * ctxtty -> t -> memty
     val find_mem_option :  Basicblock.t * ctxtty -> t -> memty option
-    val update : Basicblock.t * ctxtty -> memty -> t ->t 
+    val update : Basicblock.t * ctxtty -> memty -> t -> t 
     val pp_ctxtMem : Format.formatter -> memty CtxtM.t -> unit
     val pp : Format.formatter -> t -> unit
     val iter : (Basicblock.t -> memty CtxtM.t -> unit) -> t -> unit
     val fold' : (ctxtty -> memty -> 'a -> 'a) -> memty CtxtM.t -> 'a -> 'a
     
     val pp_exit : Format.formatter -> t -> unit
+
+    val update_without_top : Basicblock.t * ctxtty -> memty -> t -> t
   end
   
 
@@ -86,6 +88,25 @@ module Make (Ctxt : Context.S) (AbsMem : AbstractMemory.S) : (S with type ctxtty
       else 
         let ctxtMem = CtxtM.add ctxt m CtxtM.empty in
         M.add bb ctxtMem s
+
+    let update_without_top (bb_ctxt : Basicblock.t * Ctxt.t) m s =
+      let (bb, ctxt) = bb_ctxt in
+      if M.mem bb s 
+        then 
+          if CtxtM.mem ctxt (M.find bb s)
+            then 
+              let ctxtMem = M.find bb s in
+              let mem = CtxtM.find ctxt (M.find bb s) in
+              let joined_mem = AbsMem.join_without_top mem m in
+              let ctxtMem' = CtxtM.add ctxt joined_mem ctxtMem in
+              M.add bb ctxtMem' s
+          else
+            let ctxtMem = CtxtM.add ctxt m (M.find bb s) in
+            M.add bb ctxtMem s
+      else 
+        let ctxtMem = CtxtM.add ctxt m CtxtM.empty in
+        M.add bb ctxtMem s
+     
     
     (* let iter = M.iter *)
 
@@ -114,13 +135,14 @@ module Make (Ctxt : Context.S) (AbsMem : AbstractMemory.S) : (S with type ctxtty
           let _ = Pp.printf ~color:Red "<%s> ↦\n" bb.bb_name in
           F.fprintf fmt "%a\n" pp_ctxtMem m))
         (M.bindings s)
-    
+
     let pp_exit fmt (s : t) =
       F.fprintf fmt "%a" (F.pp_print_list
         ~pp_sep:(fun fmt () -> F.fprintf fmt "\n\n")
         (fun fmt ((bb : Basicblock.t), m) ->
           F.fprintf fmt "<%s> ↦\n%a\n" bb.bb_name pp_ctxtMem m))
         (M.bindings s |> List.filter (fun ((bb : Basicblock.t), _) ->
-        String.ends_with ~suffix:"#exit" bb.bb_name))
-  end
+        String.ends_with ~suffix:"#exit" bb.bb_name))   
+
+end
 

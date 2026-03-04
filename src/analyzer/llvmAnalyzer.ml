@@ -68,6 +68,11 @@ module Make
     let min = ref 1000
     let max = ref 0
 
+    let reset () : unit =
+      lc := empty;
+      min := 1000;
+      max := 0
+
     let update bb_ctxt = 
       let _ = lc := 
         if mem bb_ctxt !lc
@@ -256,7 +261,7 @@ let analyze entry states =
       let wl', states' = 
         List.fold_left
         (fun (w, s) ((succ : Basicblock.t), ctxt) -> 
-          let _ = Format.printf "-----------s----------\n BBName %s@." bb.bb_name in
+          (*let _ = Format.printf "-----------s----------\n BBName %s@." bb.bb_name in*)
           let prev_mem = States.find_mem_option (bb, ctxt) states in
           match prev_mem with
           | Some prev_mem -> 
@@ -268,9 +273,9 @@ let analyze entry states =
               let widen_mem = 
                 if LoopCounter.widen (bb, ctxt)
                   then
-                    AbsMem.widen prev_mem joined_mem
+                    AbsMem.widen_with_bb bb.bb_name prev_mem joined_mem
                   else 
-                    joined_mem 
+                    joined_mem
               in
               let w' = Worklist.add (succ, ctxt) w in
               let s' = States.update (bb, ctxt) widen_mem s in
@@ -288,6 +293,7 @@ let analyze entry states =
   (
   (*let main = Module.main !llmodule in
   let entry = Bbpool.find (main.entry) !Bbpool.pool in *)
+  let _ = summary := states in
   let init_wl = Worklist.add (entry, Ctxt.empty ())  Worklist.empty in
   analyze' init_wl states)
 

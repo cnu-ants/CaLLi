@@ -1,7 +1,9 @@
 open Calli
 module AbsValue = AbsValue
 
-type memty = AbsMemory.t
+type memty = AbsMemory.t 
+
+let tmp_addr = ref 100000
 
 let set_constraint  (value:AbsValue.t) (v:AbsValue.t) : AbsValue.t = 
     match value, v with
@@ -25,7 +27,7 @@ let abs_eval (e : Expr.t) (mem: AbsMemory.t) =
     | ConstInt {value; _} -> AbsValue.alpha (IntLiteral value) ""
     | Name {name;_} -> 
       (try (match Env.find name !Env.env with 
-      | "" -> if name = "Func_main(i32%arg_esp,i8**%argv)i32%arg_esp" then AbsValue.alpha (IntLiteral (String_addr.id_of_string name)) "" else AbsValue.top
+      | "" -> if name = "Func_main(i32%arg_esp,i8**%argv)i32%arg_esp" then AbsValue.alpha (IntLiteral (Z.of_int !tmp_addr)) "" else AbsValue.top
       | a -> AbsMemory.find a mem
       ) with _ -> AbsValue.alpha (IntLiteral (String_addr.id_of_string name)) "" )
     | Void _ -> AbsValue.top
@@ -82,8 +84,8 @@ let rec prune s (v:AbsValue.t) mem (meta : Metadata.t) =
     | Meta {alias} ->
     (match Metadata.Alias.find_opt s alias with
     | Some (Predicate {cond; operand0; operand1}) -> 
-        let _ = Format.printf "PRUNE %a %a %a@." Cond.pp cond Expr.pp operand0 Expr.pp operand1 in
-        let _ = Format.printf "CURRENT %a %a@." Expr.pp operand0 AbsValue.pp (abs_eval operand0 mem) in 
+        (*let _ = Format.printf "PRUNE %a %a %a@." Cond.pp cond Expr.pp operand0 Expr.pp operand1 in
+        let _ = Format.printf "CURRENT %a %a@." Expr.pp operand0 AbsValue.pp (abs_eval operand0 mem) in *)
         (match cond with
         (* NE *)
          | Ne when (v = f) -> 
@@ -160,19 +162,13 @@ let rec prune s (v:AbsValue.t) mem (meta : Metadata.t) =
         | Sgt when (v = t)  -> 
         (match operand0, operand1 with
         | Name {name; _}, ConstInt _ -> 
-            let _ = Format.printf "TEST0 %a@." AbsValue.pp v in
             let a = Env.find name !Env.env in (* env에서 name의 absAddr을 찾음 *)
             let v =  AbsMemory.find a mem in (* absmem에서 absAddr의 absVal을 찾음 *)
-            let _ = Format.printf "TEST1 %a@." AbsValue.pp v in
             let pruned_v = set_constraint_cond cond v (abs_eval operand1 mem) in 
-            let _ = Format.printf "TEST2 %a@." AbsValue.pp pruned_v in
             if AbsValue.(pruned_v <= (AbsValue.bot)) then
-              let _ = Format.printf "MEMBOT@." in
               AbsMemory.bot 
             else 
             let mem = AbsMemory.update a pruned_v mem in
-            let _ = Format.printf "res : %a\n" AbsValue.pp ((abs_eval operand1 mem)) in
-            let _ = Format.printf "res : %a\n" AbsValue.pp pruned_v in
             prune name pruned_v mem meta
             (*prune name (set_constraint v (abs_eval operand1 mem)) mem meta*) 
         | ConstInt _, Name {name; _} -> 
@@ -184,16 +180,10 @@ let rec prune s (v:AbsValue.t) mem (meta : Metadata.t) =
         | Sgt when (v = f)  -> 
         (match operand0, operand1 with
         | Name {name; _}, ConstInt _ -> 
-            let _ = Format.printf "TEST0 %a@." AbsValue.pp v in
             let a = Env.find name !Env.env in
             let v =  AbsMemory.find a mem in
-            let _ = Format.printf "TEST1 %a@." AbsValue.pp v in
             let pruned_v = set_constraint_cond Cond.Sle v (abs_eval operand1 mem) in 
-            let _ = Format.printf "TEST2 %a@." AbsValue.pp pruned_v in
-            let _ = Format.printf "res : %a\n" AbsValue.pp ((abs_eval operand1 mem)) in
-            let _ = Format.printf "res : %a\n" AbsValue.pp pruned_v in
             if AbsValue.(pruned_v <= (AbsValue.bot)) then
-              let _ = Format.printf "MEMBOT@." in
               AbsMemory.bot else 
             let mem = AbsMemory.update a pruned_v mem in
             prune name pruned_v mem meta
@@ -248,7 +238,6 @@ let rec prune s (v:AbsValue.t) mem (meta : Metadata.t) =
         | _ -> mem
         )
     | Some (Pointer e) ->
-        let _ = Format.printf "POINTER PRUNE : %a@." Expr.pp e in
         let a = Env.find s !Env.env in
         let v' =  AbsMemory.find a mem in
         let pruned_v = AbsValue.meet v v' in 
@@ -266,8 +255,6 @@ let rec prune s (v:AbsValue.t) mem (meta : Metadata.t) =
             let mem' = AbsValue.AbsAddr.fold
             (fun a mem ->  
                 let v' = AbsMemory.find a mem in 
-                let _ = Format.printf "POINTER PRUNE1 : %a@." AbsValue.pp v' in
-                let _ = Format.printf "POINTER PRUNE2 : %a@." AbsValue.pp pruned_v in
                 let v'' = AbsValue.meet pruned_v v' in 
                 if AbsValue.(v'' <= (AbsValue.bot)) then
                      AbsMemory.bot 
@@ -285,7 +272,7 @@ let rec prune s (v:AbsValue.t) mem (meta : Metadata.t) =
 
 let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
     let instr = stmt.inst in
-    let _ = Format.printf "%a@." Inst.pp instr in 
+    (*let _ = Format.printf "%a@." Inst.pp instr in *)
     if mem = AbsMemory.bot then mem else
     match instr with
     | ICmp {name; cond; operand0; operand1; _} ->
@@ -307,7 +294,7 @@ let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
     let v1 = abs_eval operand0 mem in
     let v2 = abs_eval operand1 mem in
     let res : AbsValue.t = AbsValue.binop op v1 v2 name in
-    let _ = if op = Shl then Format.printf "%a = %a << %a@." AbsValue.pp res AbsValue.pp v1 AbsValue.pp v2 else () in
+    (*let _ = if op = Shl then Format.printf "%a = %a << %a@." AbsValue.pp res AbsValue.pp v1 AbsValue.pp v2 else () in*)
     let addr = stmt.bb_name^(string_of_int stmt.index)^(string_of_int 0) in
     let _ = Env.env := Env.add name addr !Env.env in
     AbsMemory.update addr res mem
@@ -345,10 +332,19 @@ let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
                 let s =  (AbsValue.AbsInt.to_string i) in 
                 AbsValue.AbsAddr.S.add s addrset
               ) i AbsValue.AbsAddr.S.empty
-        | _ -> let _ = Format.printf "%a@.%a@." AbsValue.pp a AbsMemory.pp mem in failwith "InttoPtr err") in
+        | _ -> let _ = Format.printf "%a@.%a@." AbsValue.pp a AbsMemory.pp mem in failwith "InttoPtr err") 
+        in
         let mem' = AbsMemory.update addr (AbsAddr addr') mem in
         let _ = Env.env := Env.add name addr !Env.env in
         mem'
+    (*| Phi {name; incoming; _} -> 
+        let result = List.fold_left (fun acc (value, _) ->
+          let v = abs_eval value mem in 
+          AbsValue.join acc v 
+        ) AbsValue.bot incoming in 
+        let addr = stmt.bb_name^(string_of_int stmt.index)^(string_of_int 0) in 
+        let _ = Env.env := Env.add name addr !Env.env in 
+        AbsMemory.update addr result mem *)
     | Load {name; operand; _} -> 
         let addr = stmt.bb_name^(string_of_int stmt.index)^(string_of_int 0) in
         let res = abs_eval operand mem in
@@ -423,8 +419,8 @@ let abs_interp_global (v : Global.t) mem =
 
 
 let transfer (bb : Basicblock.t) (mem : AbsMemory.t)  =
-    let _ = Format.printf "TF BB : %s@." bb.bb_name in
-    let _ = Format.printf "BEFORE %a@." AbsMemory.pp mem in
+    (*let _ = Format.printf "TF BB : %s@." bb.bb_name in
+    let _ = Format.printf "BEFORE %a@." AbsMemory.pp mem in*)
     let mem' = List.fold_left
     (fun mem stmt ->
         let mem'' = abs_interp_stmt stmt mem in
@@ -433,7 +429,7 @@ let transfer (bb : Basicblock.t) (mem : AbsMemory.t)  =
     mem bb.stmts 
     in
     let mem' = abs_interp_term' bb.term mem' in
-    let _ = Format.printf "AFTER %a@." AbsMemory.pp mem' in
-    (*let _ = Format.printf "%s@." bb.bb_name in
+    (*let _ = Format.printf "AFTER %a@." AbsMemory.pp mem' in
+    let _ = Format.printf "%s@." bb.bb_name in
     let _ = Format.printf "%a@." AbsMemory.pp mem' in
     *)mem'

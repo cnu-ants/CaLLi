@@ -14,4 +14,9 @@ let iter = M.iter
 let mem = M.mem
 
 let pp ppf m =
-iter (fun k v -> Format.fprintf ppf " %s -> %s@\n" k v) m    
+iter (fun k v -> Format.fprintf ppf " %s -> %s@\n" k v) m   
+
+let reverse_env (e: t) : t = 
+  M.fold (fun key value acc ->
+  M.add value key acc
+) e M.empty

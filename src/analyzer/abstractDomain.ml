@@ -9,7 +9,8 @@ module type S =
     val (<=) : t -> t -> bool
     val join : t -> t -> t
     val meet : t -> t -> t
-    val widen : t -> t -> t
+    (* val widen : t -> t -> t *)
+    val widen : string -> t -> t -> t
 
     val alpha : elt -> string -> t
 
@@ -18,4 +19,8 @@ module type S =
 
     val pp : Format.formatter -> t -> unit
 
+    val is_top : t -> bool
+    val equal : t -> t -> bool
+    val is_singleton : t -> bool
+    val extract_value_string : t -> string option
   end

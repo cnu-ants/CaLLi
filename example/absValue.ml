@@ -1,5 +1,5 @@
 module F = Format
-module AbsInt = AbsIntSet
+module AbsInt = AbsInterval
 module AbsAddr = AbsAddr
 
   type elt = IntLiteral of Z.t | AddrLiteral of AbsAddr.elt
@@ -12,7 +12,7 @@ module AbsAddr = AbsAddr
   match v with
   | AbsTop -> F.fprintf fmt "AbsTop"
   | AbsBot -> F.fprintf fmt "AbsBot"
-  | AbsInt (v) -> F.fprintf fmt "IntSet : %a" AbsInt.pp v 
+  | AbsInt (v) -> F.fprintf fmt "IntInterval : %a" AbsInt.pp v 
   | AbsAddr v -> F.fprintf fmt "AddrSet : %a" AbsAddr.pp v 
   
   let (<=) v1 v2 = 
@@ -37,6 +37,32 @@ module AbsAddr = AbsAddr
     | _ -> 
       let s = Format.asprintf "v1 : %a\nv2: %a\n" pp v1 pp v2 in 
       failwith ("join error"^s)
+
+  let is_top v1 = 
+    match v1 with 
+    | AbsInt i -> 
+      begin 
+        match i with 
+        | IntBot -> true 
+        | _ -> false 
+      end 
+    | AbsTop | AbsBot -> true 
+    | _ -> false
+
+  let equal v1 v2 = 
+    v1 <= v2 && v2 <= v1
+
+  let is_singleton v : bool =
+    match v with 
+    | AbsInt i -> AbsInt.is_singleton i 
+    | AbsAddr a -> AbsAddr.is_singleton a 
+    | _ -> false
+
+  let extract_value_string v : string option = 
+    match v with 
+    | AbsInt i -> AbsInt.extract_value_string i 
+    | AbsAddr a -> AbsAddr.extract_value_string a 
+    | _ -> None 
 
     let meet v1 v2 = 
       match v1, v2 with
@@ -120,13 +146,13 @@ module AbsAddr = AbsAddr
       | IntLiteral n -> alpha_int n
       | AddrLiteral a -> alpha_addr a
 
-    let widen v1 v2 = 
+    let widen key v1 v2 = 
       match v1, v2 with
       | _, AbsBot -> v1
       | AbsBot, _ -> v2
       | AbsTop, _ -> AbsTop
       | _, AbsTop -> AbsTop
-      | AbsInt n1, AbsInt n2 -> AbsInt (AbsInt.widen n1 n2)
+      | AbsInt n1, AbsInt n2 -> AbsInt (AbsInt.widen key n1 n2)
       | AbsAddr n1, AbsAddr n2 -> AbsAddr (AbsAddr.widen n1 n2)
       | _ -> failwith "widen error"
 

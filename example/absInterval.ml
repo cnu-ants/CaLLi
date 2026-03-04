@@ -6,6 +6,7 @@ let bot :t = IntBot
 let top :t = IntInterval {min=MinInf; max=MaxInf}
 
 module Elt = struct
+  type t = elt
 
   let zero = 
     I (Z.of_int 0)
@@ -25,8 +26,7 @@ module Elt = struct
   | _, MinInf -> 1
   | MaxInf, _ -> 1
   | _, MaxInf -> -1
-
-
+  
   let (<)  a b = compare a b < 0
 let (<=) a b = compare a b <= 0
 let (>)  a b = compare a b > 0
@@ -366,6 +366,17 @@ end
 let elt_succ x = Elt.(x + one)
 let elt_pred x = Elt.(x - one)
 
+let pp_elt _ elt = 
+  match elt with
+  | I i -> F.printf "%s" (Z.to_string i)
+  | MinInf -> F.printf "-inf"
+  | MaxInf -> F.printf "+inf"
+
+let pp fmt n =
+  match n with
+  | IntBot -> F.fprintf fmt "IntBot"
+  | IntInterval {min; max} -> F.fprintf fmt "[%a, %a]" pp_elt min pp_elt max
+
 let mk_interval min max =
   if Elt.(min > max) then IntBot else IntInterval { min; max }
    
@@ -431,7 +442,6 @@ let app_sge n1 n2 =
       mk_interval (if Elt.(min0 >= max1) then min0 else max1) max0
 
 let app_sgt n1 n2 =
-  let _ = Format.printf "Test pinpoint2@." in
   let res = match n1, n2 with
   | IntBot, _ -> IntBot
   | _, IntBot -> IntBot
@@ -439,18 +449,98 @@ let app_sgt n1 n2 =
       (* Require x > y for all y in n2 => x >= max(n2)+1 *)
       mk_interval (if Elt.(min0 >= max1) then min0 else max1) max0
   in 
-  let _ = Format.printf "Test pinpoin3@." in
   res
 
-let widen n1 n2 =
+(* original *)
+(* let widen n1 n2 =
   match n1, n2 with
   | IntBot, x -> x
   | x, IntBot -> x
   | IntInterval { min = min1; max = max1 }, IntInterval { min = min2; max = max2 } ->
       let min' = if Elt.(min2 < min1) then MinInf else min1 in
       let max' = if Elt.(max2 > max1) then MaxInf else max1 in
-      IntInterval { min = min'; max = max' }
-  
+      IntInterval { min = min'; max = max' } *)
+
+module EltSet = Set.Make(Elt)      
+module EltSetMap = Map.Make(String)
+
+let threshold_B = 50
+let counter_B = ref 0
+
+(* let global_b : EltSet.t ref =
+  ref (EltSet.of_list [MinInf; MaxInf]) *)
+
+let global_b : EltSet.t EltSetMap.t ref = ref EltSetMap.empty
+
+(* b 안에서 n보다 작거나 같은 값들 중, 가장 큰 값을 찾음 *)
+let get_min_in_B b n = 
+  try
+    EltSet.fold (fun t acc ->
+      (* b의 원소 t를 하나씩 꺼내면서 n보다 작거나 같고 현재까지 찾은 최대값보다 큰 경우에 acc를 변경 *)
+      if Elt.(t <= n) && Elt.(t > acc) then t else acc
+    ) b MinInf 
+  with _ -> MinInf
+
+let get_max_in_B b n =
+  try
+    EltSet.fold (fun t acc ->
+      if Elt.(t >= n) && Elt.(t < acc) then t else acc 
+    ) b MaxInf
+  with _ -> MaxInf
+
+let widening_with_B n1 n2 b = 
+  match n1, n2 with 
+  | IntBot, x -> x 
+  | x, IntBot -> x 
+  | IntInterval { min = n1_min; max = n1_max}, IntInterval { min = n2_min; max = n2_max } ->
+    let min' = if Elt.(n2_min < n1_min) then get_min_in_B b n2_min else n1_min in
+    let max' = if Elt.(n2_max > n1_max) then get_max_in_B b n2_max else n1_max in 
+    IntInterval {min = min'; max = max'}
+  (* | IntInterval { min = n1_min; max = n1_max}, IntInterval { min = n2_min; max = n2_max } -> 
+    if n1 <= n2 then
+      if n1 = n2 then n2
+      else 
+        (*let _ = counter_B := !counter_B + 1 in
+        if !counter_B > threshold_B then top else*)
+        let _ = Format.printf "TARGET : %a %a@." pp n1 pp n2 in
+        let min' = if Elt.(n2_min < n1_min) then let min = get_min_in_B b n2_min in let _ =  Format.printf "Min : %a@." pp_elt min in min else MinInf in
+        let max' = if Elt.(n2_max > n1_max) then let max = get_max_in_B b n2_max in let _ =  Format.printf "Max : %a@." pp_elt max in max else MaxInf in 
+        let _ = Format.printf "MIN: %a MAX: %a@." pp_elt min' pp_elt max' in
+        let v = IntInterval {min = min'; max = max'} in 
+        let _ = Format.printf "WIDEN : %a@." pp v in 
+        v
+    else join n1 n2  *)
+    
+(* new *) (* set_summary: (bb * ctxt) * absMem *) (* absMem: absaddr * absval *)
+let widen key n1 n2 = 
+  (* let test_b = EltSet.of_list [
+  MinInf;
+  I (Z.of_int 0);
+  I (Z.of_int 8);
+  I (Z.of_int 20);
+  MaxInf
+  ] in *)
+  let b = match EltSetMap.find_opt key !global_b with
+  | Some s -> s 
+  | None -> EltSet.of_list [MinInf; MaxInf]
+  in
+  widening_with_B n1 n2 b
+
+(* new *)
+let is_singleton n : bool = 
+  match n with 
+  | IntBot -> false
+  | IntInterval { min; max } -> Elt.(min == max)
+
+let extract_value_string n : string option = 
+  match n with 
+  | IntInterval { min; _ } ->
+    begin
+    match min with 
+    | I i -> Some (Z.to_string i)
+    | _ -> None
+    end
+  | _ -> None 
 
 let fold (f : elt -> 'a -> 'a) (itv : t) (init : 'a) : 'a =
   match itv with
@@ -475,14 +565,11 @@ let to_string elt =
     | MinInf -> "-inf"
     | MaxInf -> "+inf"
    
+let pp_global_b () =
+  Format.printf "B Sets:@.";
+  EltSetMap.iter (fun name eltset ->
+    Format.printf "  %s = { " name;
+    EltSet.iter (fun e -> Format.printf "%a " pp_elt e) eltset;
+    Format.printf "}@."
+  ) !global_b
 
-let pp_elt _ elt = 
-    match elt with
-    | I i -> F.printf "%s" (Z.to_string i)
-    | MinInf -> F.printf "-inf"
-    | MaxInf -> F.printf "+inf"
-
-let pp fmt n =
-    match n with
-    | IntBot -> F.fprintf fmt "IntBot"
-    | IntInterval {min; max} -> F.fprintf fmt "[%a, %a]" pp_elt min pp_elt max

@@ -1,6 +1,6 @@
 module F = Format
 module AbsAddr = AbsAddr
-module AbsInt = AbsInterval
+module AbsInt = AbsIntSet
 
   type elt = IntLiteral of Z.t | AddrLiteral of AbsAddr.elt
   type t = | AbsTop | AbsAddr of  AbsAddr.t | AbsInt of AbsInt.t | AbsBot
@@ -46,6 +46,32 @@ module AbsInt = AbsInterval
       | AbsAddr a1 , AbsAddr a2 -> AbsAddr (AbsAddr.meet a1 a2)
       | AbsInt n1, AbsInt n2 -> AbsInt (AbsInt.meet n1 n2)
       | _ -> failwith "meet error"
+
+    let is_top v1 = 
+      match v1 with 
+      | AbsInt i -> 
+        begin 
+          match i with 
+          | IntTop -> true 
+          | _ -> false 
+        end 
+      | AbsTop | AbsBot -> true 
+      | _ -> false
+
+    let equal v1 v2 = 
+      v1 <= v2 && v2 <= v1
+
+    let is_singleton v : bool =
+      match v with 
+      | AbsInt i -> AbsInt.is_singleton i 
+      | AbsAddr a -> AbsAddr.is_singleton a 
+      | _ -> false
+
+    let extract_value_string v : string option = 
+      match v with 
+      | AbsInt i -> AbsInt.extract_value_string i 
+      | AbsAddr a -> AbsAddr.extract_value_string a 
+      | _ -> None  
 
     let sub v1 v2 = 
       match v1, v2 with
@@ -121,7 +147,7 @@ module AbsInt = AbsInterval
       | IntLiteral n -> alpha_int n
       | AddrLiteral a -> alpha_addr a
 
-    let widen v1 v2 = 
+    let widen _key v1 v2 = 
       match v1, v2 with
       | _, AbsBot -> v1
       | AbsBot, _ -> v2
