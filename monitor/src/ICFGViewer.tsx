@@ -48,6 +48,9 @@ const CTX_BTN_PAD_Y = Math.round(4 * NODE_SCALE * 1.2);
 const CTX_BTN_PAD_X = Math.round(10 * NODE_SCALE * 1.2);
 
 const BP_LS_KEY = "calli_breakpoints_v1";
+const UI_RIGHT_PANEL_W_KEY = "calli_ui_right_panel_w_v1";
+const UI_ENV_COLLAPSED_KEY = "calli_ui_env_collapsed_v1";
+const UI_STATE_COLLAPSED_KEY = "calli_ui_state_collapsed_v1";
 
 const INSTR_BOX_H = Math.round(300 * NODE_SCALE);
 const NODE_HEADER_H = Math.round(54 * NODE_SCALE);
@@ -80,6 +83,39 @@ function saveBpMap(m: Record<string, boolean>) {
   } catch {}
 }
 
+function loadBool(key: string, def: boolean): boolean {
+  try {
+    const s = localStorage.getItem(key);
+    if (s === null) return def;
+    return s === "1";
+  } catch {
+    return def;
+  }
+}
+
+function saveBool(key: string, v: boolean) {
+  try {
+    localStorage.setItem(key, v ? "1" : "0");
+  } catch {}
+}
+
+function loadNum(key: string, def: number): number {
+  try {
+    const s = localStorage.getItem(key);
+    if (!s) return def;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : def;
+  } catch {
+    return def;
+  }
+}
+
+function saveNum(key: string, v: number) {
+  try {
+    localStorage.setItem(key, String(v));
+  } catch {}
+}
+
 type LayoutInfo = {
   pos: Record<string, { x: number; y: number }>;
   edges: { id: string; source: string; target: string; kind: "call" | "fallback" | "ret" | "intra" }[];
@@ -95,7 +131,6 @@ function computeLayout(graph: GraphJSON): LayoutInfo {
   }));
 
   const nodeCount = nodes.length;
-
   const sizeFactor = nodeCount > 800 ? 1.15 : nodeCount > 400 ? 1.1 : nodeCount > 200 ? 1.05 : 1.0;
 
   const baseNodesep = Math.round(Math.max(40, Math.min(95, NODE_W * 0.18)));
@@ -106,7 +141,6 @@ function computeLayout(graph: GraphJSON): LayoutInfo {
 
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
-
   g.setGraph({
     rankdir: "TB",
     nodesep,
@@ -116,13 +150,8 @@ function computeLayout(graph: GraphJSON): LayoutInfo {
     ranker: "longest-path",
   });
 
-  for (const n of nodes) {
-    g.setNode(n.id, { width: NODE_W, height: NODE_H });
-  }
-
-  for (const e of edges) {
-    g.setEdge(e.source, e.target, { minlen: 1 });
-  }
+  for (const n of nodes) g.setNode(n.id, { width: NODE_W, height: NODE_H });
+  for (const e of edges) g.setEdge(e.source, e.target, { minlen: 1 });
 
   dagre.layout(g);
 
@@ -165,11 +194,27 @@ export default function ICFGViewer() {
   const [selIsBot, setSelIsBot] = useState<boolean>(false);
 
   const [envItems, setEnvItems] = useState<{ var: string; addr: string }[]>([]);
-
   const [bpMap, setBpMap] = useState<Record<string, boolean>>(() => loadBpMap());
 
   const [searchText, setSearchText] = useState<string>("");
   const [activeMatchIdx, setActiveMatchIdx] = useState<number>(0);
+
+  const [envCollapsed, setEnvCollapsed] = useState<boolean>(() => loadBool(UI_ENV_COLLAPSED_KEY, false));
+  const [stateCollapsed, setStateCollapsed] = useState<boolean>(() => loadBool(UI_STATE_COLLAPSED_KEY, false));
+
+  const defaultRightPanelW = Math.round(820 * UI_SCALE);
+  const [rightPanelW, setRightPanelW] = useState<number>(() => loadNum(UI_RIGHT_PANEL_W_KEY, defaultRightPanelW));
+
+  const [envQuery, setEnvQuery] = useState<string>("");
+  const [stateAddrQuery, setStateAddrQuery] = useState<string>("");
+
+  const [highlightAddr, setHighlightAddr] = useState<string>("");
+  const highlightTimerRef = useRef<number | null>(null);
+  const stateRowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
+
+  const resizingRef = useRef<boolean>(false);
+  const resizeStartXRef = useRef<number>(0);
+  const resizeStartWRef = useRef<number>(0);
 
   useEffect(() => {
     fetch("/icfg")
@@ -228,38 +273,40 @@ export default function ICFGViewer() {
     setSelEntries(hit.entries);
   };
 
-  const centerNodeBetweenPanels = (bbId: string, nodes: Node[]) => {
-    if (!rfInstance) return;
-    const node = nodes.find((n) => n.id === bbId);
-    if (!node) return;
+  const LEFT_PANEL_W = Math.round(430 * UI_SCALE);
+  const M = 16;
 
-    const w = (node.width as number) || NODE_W;
-    const h = (node.height as number) || NODE_H;
-    const nodeCenterX = node.position.x + w / 2;
-    const nodeCenterY = node.position.y + h / 2;
+  const centerNodeBetweenPanels = useCallback(
+    (bbId: string, nodes: Node[]) => {
+      if (!rfInstance) return;
+      const node = nodes.find((n) => n.id === bbId);
+      if (!node) return;
 
-    const LEFT_W = Math.round(430 * UI_SCALE);
-    const RIGHT_W = Math.round(820 * UI_SCALE);
-    const M = 16;
+      const w = (node.width as number) || NODE_W;
+      const h = (node.height as number) || NODE_H;
+      const nodeCenterX = node.position.x + w / 2;
+      const nodeCenterY = node.position.y + h / 2;
 
-    const screenW = window.innerWidth;
-    const screenH = window.innerHeight;
+      const screenW = window.innerWidth;
+      const screenH = window.innerHeight;
 
-    const desiredScreenX = (LEFT_W + M + (screenW - RIGHT_W - M)) / 2;
-    const desiredScreenY = screenH / 2;
+      const desiredScreenX = (LEFT_PANEL_W + M + (screenW - rightPanelW - M)) / 2;
+      const desiredScreenY = screenH / 2;
 
-    const vp: Viewport =
-      (rfInstance as any).getViewport ? (rfInstance as any).getViewport() : { x: 0, y: 0, zoom: 1 };
-    const zoom = vp.zoom ?? 1;
+      const vp: Viewport =
+        (rfInstance as any).getViewport ? (rfInstance as any).getViewport() : { x: 0, y: 0, zoom: 1 };
+      const zoom = vp.zoom ?? 1;
 
-    const nextViewport: Viewport = {
-      x: desiredScreenX - nodeCenterX * zoom,
-      y: desiredScreenY - nodeCenterY * zoom,
-      zoom,
-    };
+      const nextViewport: Viewport = {
+        x: desiredScreenX - nodeCenterX * zoom,
+        y: desiredScreenY - nodeCenterY * zoom,
+        zoom,
+      };
 
-    (rfInstance as any).setViewport(nextViewport, { duration: 250 });
-  };
+      (rfInstance as any).setViewport(nextViewport, { duration: 250 });
+    },
+    [rfInstance, rightPanelW, LEFT_PANEL_W]
+  );
 
   const sendWs = (obj: any) => {
     const ws = wsRef.current;
@@ -361,6 +408,9 @@ export default function ICFGViewer() {
     setEnvItems([]);
     setSearchText("");
     setActiveMatchIdx(0);
+    setEnvQuery("");
+    setStateAddrQuery("");
+    setHighlightAddr("");
   }, []);
 
   const sendCmd = useCallback(
@@ -470,36 +520,13 @@ export default function ICFGViewer() {
           rawLabel: labelText,
           label: (
             <div style={{ fontFamily: "monospace", textAlign: "left" }}>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 10,
-                  marginBottom: 10,
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: NODE_TITLE_FS,
-                    fontWeight: 700,
-                    wordBreak: "break-all",
-                    textAlign: "left",
-                    flex: 1,
-                  }}
-                >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 10 }}>
+                <div style={{ fontSize: NODE_TITLE_FS, fontWeight: 700, wordBreak: "break-all", textAlign: "left", flex: 1 }}>
                   {labelText}
                 </div>
 
                 <label
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    fontSize: NODE_BODY_FS,
-                    userSelect: "none",
-                    whiteSpace: "nowrap",
-                  }}
+                  style={{ display: "flex", alignItems: "center", gap: 8, fontSize: NODE_BODY_FS, userSelect: "none", whiteSpace: "nowrap" }}
                   onClick={(ev) => ev.stopPropagation()}
                   title="Breakpoint"
                 >
@@ -566,9 +593,7 @@ export default function ICFGViewer() {
   const matchedNodeIds = useMemo(() => {
     const q = normalizeQuery(searchText);
     if (!q) return [];
-    return rf.nodes
-      .filter((n) => nodeSearchText(n as Node<NodeData>).toLowerCase().includes(q))
-      .map((n) => n.id);
+    return rf.nodes.filter((n) => nodeSearchText(n as Node<NodeData>).toLowerCase().includes(q)).map((n) => n.id);
   }, [searchText, rf.nodes]);
 
   useEffect(() => {
@@ -584,7 +609,7 @@ export default function ICFGViewer() {
       if (!id) return;
       centerNodeBetweenPanels(id, rf.nodes);
     },
-    [rfInstance, rf.nodes]
+    [rfInstance, rf.nodes, centerNodeBetweenPanels]
   );
 
   const gotoActiveMatch = useCallback(() => {
@@ -639,12 +664,12 @@ export default function ICFGViewer() {
   useEffect(() => {
     if (!rfInstance || !currentBb) return;
     centerNodeBetweenPanels(currentBb, rf.nodes);
-  }, [rfInstance, currentBb, rf.nodes]);
+  }, [rfInstance, currentBb, rf.nodes, centerNodeBetweenPanels]);
 
   useEffect(() => {
     if (!rfInstance || !selBb) return;
     centerNodeBetweenPanels(selBb, rf.nodes);
-  }, [rfInstance, selBb, rf.nodes]);
+  }, [rfInstance, selBb, rf.nodes, centerNodeBetweenPanels]);
 
   useEffect(() => {
     if (!rfInstance) return;
@@ -653,20 +678,8 @@ export default function ICFGViewer() {
     rfInstance.fitView({ padding: 0.12 });
   }, [rfInstance, !!graph]);
 
-  if (!graph && !err) return <div style={{ padding: 16, fontFamily: "monospace" }}>Loading /icfg...</div>;
-  if (err)
-    return (
-      <div style={{ padding: 16, fontFamily: "monospace" }}>
-        <div>Failed to load /icfg</div>
-        <pre>{err}</pre>
-      </div>
-    );
-
   const panelFont = Math.round(13 * UI_SCALE);
   const panelSmall = Math.round(12 * UI_SCALE);
-
-  const LEFT_PANEL_W = Math.round(430 * UI_SCALE);
-  const RIGHT_PANEL_W = Math.round(820 * UI_SCALE);
 
   const MINIMAP_W = 440;
   const MINIMAP_H = 320;
@@ -682,6 +695,104 @@ export default function ICFGViewer() {
     if (id && bpMap[id]) return "#f59e0b";
     return "#9ca3af";
   };
+
+  const filteredEnvItems = useMemo(() => {
+    const q = normalizeQuery(envQuery);
+    if (!q) return envItems;
+    return envItems.filter((it) => it.var.toLowerCase().includes(q));
+  }, [envItems, envQuery]);
+
+  const filteredStateEntries = useMemo(() => {
+    const q = normalizeQuery(stateAddrQuery);
+    if (!q) return selEntries;
+    return selEntries.filter((e) => e.addr.toLowerCase().includes(q));
+  }, [selEntries, stateAddrQuery]);
+
+  const focusStateAddr = useCallback(
+    (addr: string) => {
+      if (!addr) return;
+
+      if (highlightTimerRef.current !== null) {
+        window.clearTimeout(highlightTimerRef.current);
+        highlightTimerRef.current = null;
+      }
+
+      setStateCollapsed(false);
+      saveBool(UI_STATE_COLLAPSED_KEY, false);
+
+      setStateAddrQuery(addr);
+      setHighlightAddr(addr);
+
+      window.setTimeout(() => {
+        const row = stateRowRefs.current[addr];
+        if (row) row.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 60);
+
+      highlightTimerRef.current = window.setTimeout(() => {
+        setHighlightAddr("");
+        highlightTimerRef.current = null;
+      }, 2500);
+    },
+    [setStateCollapsed]
+  );
+
+  const toggleEnvCollapsed = () => {
+    setEnvCollapsed((prev) => {
+      const next = !prev;
+      saveBool(UI_ENV_COLLAPSED_KEY, next);
+      return next;
+    });
+  };
+
+  const toggleStateCollapsed = () => {
+    setStateCollapsed((prev) => {
+      const next = !prev;
+      saveBool(UI_STATE_COLLAPSED_KEY, next);
+      return next;
+    });
+  };
+
+  const startResizeRightPanel = (ev: React.MouseEvent) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    resizingRef.current = true;
+    resizeStartXRef.current = ev.clientX;
+    resizeStartWRef.current = rightPanelW;
+  };
+
+  useEffect(() => {
+    const onMove = (ev: MouseEvent) => {
+      if (!resizingRef.current) return;
+      const dx = resizeStartXRef.current - ev.clientX;
+      const nextW = resizeStartWRef.current + dx;
+      const minW = Math.round(420 * UI_SCALE);
+      const maxW = Math.max(minW, window.innerWidth - LEFT_PANEL_W - M - 80);
+      const clamped = Math.max(minW, Math.min(maxW, nextW));
+      setRightPanelW(clamped);
+    };
+
+    const onUp = () => {
+      if (!resizingRef.current) return;
+      resizingRef.current = false;
+      saveNum(UI_RIGHT_PANEL_W_KEY, rightPanelW);
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [rightPanelW, LEFT_PANEL_W]);
+
+  if (!graph && !err) return <div style={{ padding: 16, fontFamily: "monospace" }}>Loading /icfg...</div>;
+  if (err)
+    return (
+      <div style={{ padding: 16, fontFamily: "monospace" }}>
+        <div>Failed to load /icfg</div>
+        <pre>{err}</pre>
+      </div>
+    );
 
   return (
     <div style={{ width: "100vw", height: "100vh" }}>
@@ -744,11 +855,7 @@ export default function ICFGViewer() {
               bpList.map((x) => (
                 <div key={x} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "4px 0" }}>
                   <span style={{ wordBreak: "break-all" }}>{x}</span>
-                  <button
-                    style={{ fontSize: panelSmall }}
-                    onClick={() => setBreakpoint(x, false)}
-                    disabled={wsStatus !== "connected"}
-                  >
+                  <button style={{ fontSize: panelSmall }} onClick={() => setBreakpoint(x, false)} disabled={wsStatus !== "connected"}>
                     x
                   </button>
                 </div>
@@ -808,15 +915,7 @@ export default function ICFGViewer() {
             }}
           />
 
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 8,
-              marginTop: 8,
-            }}
-          >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginTop: 8 }}>
             <div style={{ fontSize: panelSmall, opacity: 0.85 }}>
               {matchedNodeIds.length === 0 ? "0 matches" : `${matchedNodeIds.length} matches`}
               {activeMatchId ? ` (selected: ${activeMatchIdx + 1}/${matchedNodeIds.length})` : ""}
@@ -862,76 +961,200 @@ export default function ICFGViewer() {
           borderRadius: 10,
           fontFamily: "monospace",
           fontSize: panelFont,
-          width: RIGHT_PANEL_W,
+          width: rightPanelW,
           maxHeight: "95vh",
           overflow: "auto",
+          boxSizing: "border-box",
         }}
       >
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: Math.round(14 * UI_SCALE) }}>
-          <div>
-            <div style={{ fontWeight: 700 }}>ENV (var → addr)</div>
-            <div style={{ marginTop: 10, fontSize: panelSmall }}>
-              {envItems.length === 0 ? (
-                <div>(empty)</div>
-              ) : (
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr>
-                      <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", paddingBottom: 8 }}>var</th>
-                      <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", paddingBottom: 8 }}>addr</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {envItems.map((it, i) => (
-                      <tr key={i}>
-                        <td style={{ verticalAlign: "top", padding: "8px 10px 8px 0", borderBottom: "1px solid #f3f4f6" }}>
-                          {it.var}
-                        </td>
-                        <td style={{ verticalAlign: "top", padding: "8px 0", borderBottom: "1px solid #f3f4f6" }}>
-                          {it.addr}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
+        <div
+          onMouseDown={startResizeRightPanel}
+          title="Resize"
+          style={{
+            position: "absolute",
+            left: -6,
+            top: 0,
+            bottom: 0,
+            width: 12,
+            cursor: "col-resize",
+            zIndex: 10000,
+          }}
+        />
+
+        <div style={{ display: "flex", flexDirection: "column", gap: Math.round(12 * UI_SCALE) }}>
+          <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: Math.round(10 * UI_SCALE) }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+              <div style={{ fontWeight: 700 }}>ENV (var → addr)</div>
+              <button type="button" onClick={toggleEnvCollapsed} style={{ fontSize: panelSmall }}>
+                {envCollapsed ? "Expand" : "Collapse"}
+              </button>
             </div>
+
+            {!envCollapsed && (
+              <>
+                <input
+                  value={envQuery}
+                  onChange={(e) => setEnvQuery(e.target.value)}
+                  placeholder="Filter by var"
+                  style={{
+                    width: "100%",
+                    boxSizing: "border-box",
+                    marginTop: 10,
+                    padding: "8px 10px",
+                    borderRadius: 8,
+                    border: "1px solid rgba(0,0,0,0.2)",
+                    fontSize: panelSmall,
+                    fontFamily: "monospace",
+                  }}
+                />
+
+                <div style={{ marginTop: 10, fontSize: panelSmall }}>
+                  {filteredEnvItems.length === 0 ? (
+                    <div>(empty)</div>
+                  ) : (
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <thead>
+                        <tr>
+                          <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", paddingBottom: 8 }}>var</th>
+                          <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", paddingBottom: 8 }}>addr</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredEnvItems.map((it, i) => (
+                          <tr key={`${it.var}:${it.addr}:${i}`}>
+                            <td
+                              style={{
+                                verticalAlign: "top",
+                                padding: "8px 10px 8px 0",
+                                borderBottom: "1px solid #f3f4f6",
+                                maxWidth: 260,
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                              }}
+                              title={it.var}
+                            >
+                              {it.var}
+                            </td>
+                            <td style={{ verticalAlign: "top", padding: "8px 0", borderBottom: "1px solid #f3f4f6" }}>
+                              <button
+                                type="button"
+                                onClick={() => focusStateAddr(it.addr)}
+                                style={{
+                                  fontFamily: "monospace",
+                                  fontSize: panelSmall,
+                                  padding: 0,
+                                  border: "none",
+                                  background: "transparent",
+                                  cursor: "pointer",
+                                  color: "#2563eb",
+                                  textAlign: "left",
+                                  maxWidth: 360,
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap",
+                                }}
+                                title={`Focus state addr: ${it.addr}`}
+                              >
+                                {it.addr}
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </>
+            )}
           </div>
 
-          <div>
-            <div style={{ fontWeight: 700 }}>Selected State</div>
-            <div style={{ marginTop: 10, fontSize: panelSmall, wordBreak: "break-word" }}>
-              bb: {selBb || "(none)"} <br />
-              ctxt: {selCtxt || "(none)"} <br />
-              bot: {selBb ? String(selIsBot) : "(n/a)"}
+          <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: Math.round(10 * UI_SCALE) }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+              <div style={{ fontWeight: 700 }}>Selected State</div>
+              <button type="button" onClick={toggleStateCollapsed} style={{ fontSize: panelSmall }}>
+                {stateCollapsed ? "Expand" : "Collapse"}
+              </button>
             </div>
 
-            <div style={{ marginTop: 12, fontSize: panelSmall }}>
-              {selEntries.length === 0 ? (
-                <div>(no entries)</div>
-              ) : (
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr>
-                      <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", paddingBottom: 8 }}>addr</th>
-                      <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", paddingBottom: 8 }}>value</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {selEntries.map((e, i) => (
-                      <tr key={i}>
-                        <td style={{ verticalAlign: "top", padding: "8px 10px 8px 0", borderBottom: "1px solid #f3f4f6" }}>
-                          {e.addr}
-                        </td>
-                        <td style={{ verticalAlign: "top", padding: "8px 0", borderBottom: "1px solid #f3f4f6" }}>
-                          {e.value}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
+            {!stateCollapsed && (
+              <>
+                <div style={{ marginTop: 10, fontSize: panelSmall, wordBreak: "break-word" }}>
+                  bb: {selBb || "(none)"} <br />
+                  ctxt: {selCtxt || "(none)"} <br />
+                  bot: {selBb ? String(selIsBot) : "(n/a)"}
+                </div>
+
+                <input
+                  value={stateAddrQuery}
+                  onChange={(e) => setStateAddrQuery(e.target.value)}
+                  placeholder="Filter by addr"
+                  style={{
+                    width: "100%",
+                    boxSizing: "border-box",
+                    marginTop: 10,
+                    padding: "8px 10px",
+                    borderRadius: 8,
+                    border: "1px solid rgba(0,0,0,0.2)",
+                    fontSize: panelSmall,
+                    fontFamily: "monospace",
+                  }}
+                />
+
+                <div style={{ marginTop: 12, fontSize: panelSmall }}>
+                  {filteredStateEntries.length === 0 ? (
+                    <div>(no entries)</div>
+                  ) : (
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <thead>
+                        <tr>
+                          <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", paddingBottom: 8 }}>addr</th>
+                          <th style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb", paddingBottom: 8 }}>value</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredStateEntries.map((e, i) => {
+                          const isHL = highlightAddr !== "" && e.addr === highlightAddr;
+                          return (
+                            <tr
+                              key={`${e.addr}:${i}`}
+                              ref={(el) => {
+                                stateRowRefs.current[e.addr] = el;
+                              }}
+                              style={{
+                                background: isHL ? "rgba(245,158,11,0.18)" : "transparent",
+                                outline: isHL ? "2px solid rgba(245,158,11,0.55)" : "none",
+                                outlineOffset: -2,
+                              }}
+                            >
+                              <td
+                                style={{
+                                  verticalAlign: "top",
+                                  padding: "8px 10px 8px 0",
+                                  borderBottom: "1px solid #f3f4f6",
+                                  maxWidth: 360,
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap",
+                                }}
+                                title={e.addr}
+                              >
+                                {e.addr}
+                              </td>
+                              <td style={{ verticalAlign: "top", padding: "8px 0", borderBottom: "1px solid #f3f4f6" }}>
+                                <div style={{ maxWidth: 520, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={e.value}>
+                                  {e.value}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>
