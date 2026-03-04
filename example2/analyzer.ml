@@ -39,18 +39,6 @@ module Ctxt =
     end)
 
 module States = States.Make (Ctxt) (AbsMemory)
-module Analyzer = LlvmAnalyzer.Make (AbsValue) (AbsMemory) (Ctxt) (States) (TF)
-
-module Web =
-  Monitor_server.Make (struct
-    type runtime = Analyzer.runtime
-    let get_icfg_json = Analyzer.get_icfg_json
-    type step_ev = Analyzer.step_ev = Done | Stepped of string
-    let step_once = Analyzer.step_once
-    let snapshot_json = Analyzer.snapshot_json
-    let get_state_for_bb_json = Analyzer.get_state_for_bb_json
-    let get_all_states_json = Analyzer.get_all_states_json
-  end)
 
 let () =
   let web_enabled = has_flag "--web" in
@@ -64,19 +52,29 @@ let () =
   in
 
   let llm = Init.m () in
-  let init_mem = Analyzer.init llm in
   let target_f : Function.t = Module.find target (Init.llmodule ()) in
   let entry = Bbpool.find target_f.entry !Bbpool.pool in
 
-  Analyzer.LoopCounter.set_max_count 30;
-
-  let init_states = States.update (entry, Ctxt.empty ()) init_mem States.empty in
-
   if web_enabled then (
+    let module Analyzer = LlvmWebAnalyzer.Make (AbsValue) (AbsMemory) (Ctxt) (States) (TF) in
+    let module Web = Monitor_server.Make (Analyzer) in
+
+    Analyzer.LoopCounter.set_max_count 30;
+
+    let init_mem = Analyzer.init llm in
+    let init_states = States.update (entry, Ctxt.empty ()) init_mem States.empty in
     let rt = Analyzer.init_runtime ~entry ~init_states in
+
     Web.start ~runtime:rt ~interface ~port
   ) else (
+    let module Analyzer = LlvmAnalyzer.Make (AbsValue) (AbsMemory) (Ctxt) (States) (TF) in
+
+    Analyzer.LoopCounter.set_max_count 30;
+
+    let init_mem = Analyzer.init llm in
+    let init_states = States.update (entry, Ctxt.empty ()) init_mem States.empty in
     let _ = Analyzer.analyze_full entry init_states in
+
     let s = !Analyzer.summary in
     let _ = Format.printf "ENV \n %a\n" Env.pp !Env.env in
     let _ = Format.printf "STATES \n %a\n" States.pp s in

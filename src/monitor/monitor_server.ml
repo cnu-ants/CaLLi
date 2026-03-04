@@ -1,14 +1,18 @@
 open Lwt.Infix
 
-module Make (A : sig
+module type WEB_ANALYZER = sig
   type runtime
   val get_icfg_json : unit -> string
+
   type step_ev = Done | Stepped of string
   val step_once : runtime -> step_ev
+
   val snapshot_json : runtime -> Yojson.Safe.t
   val get_state_for_bb_json : runtime -> string -> Yojson.Safe.t
   val get_all_states_json : runtime -> Yojson.Safe.t
-end) =
+end
+
+module Make (A : WEB_ANALYZER) =
 struct
   module SS = Set.Make (String)
 
@@ -104,7 +108,9 @@ struct
                 Lwt.pause () >>= fun () -> run_continue max_steps_per_slice ran'
               else
                 run_continue (fuel - 1) ran'
-      and run_budget (n : int) (fuel : int) (ran : int) : unit Lwt.t =
+      in
+
+      let rec run_budget (n : int) (fuel : int) (ran : int) : unit Lwt.t =
         if !paused then Lwt.return_unit
         else if n <= 0 then (
           stop ();
@@ -120,7 +126,9 @@ struct
                 Lwt.pause () >>= fun () -> run_budget n max_steps_per_slice ran'
               else
                 run_budget (n - 1) (fuel - 1) ran'
-      and run_loop () : unit Lwt.t =
+      in
+
+      let rec run_loop () : unit Lwt.t =
         if !paused then (running := false; Lwt.return_unit)
         else
           match !req with
