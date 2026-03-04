@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import ReactFlow, { Background, Controls, Position } from "reactflow";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ReactFlow, { Background, Controls, MiniMap, Position } from "reactflow";
 import type { Edge, Node, ReactFlowInstance, Viewport } from "reactflow";
 import "reactflow/dist/style.css";
 import dagre from "dagre";
@@ -30,8 +30,9 @@ type StateResp = {
 };
 
 type StatesResp = { items: StateResp[] };
-
 type EnvResp = { items: { var: string; addr: string }[] };
+
+type NodeData = { label: React.ReactNode; rawLabel: string };
 
 const NODE_W = 420;
 
@@ -48,49 +49,18 @@ const CTX_BTN_PAD_X = Math.round(10 * NODE_SCALE * 1.2);
 
 const BP_LS_KEY = "calli_breakpoints_v1";
 
+const INSTR_BOX_H = Math.round(300 * NODE_SCALE);
+const NODE_HEADER_H = Math.round(54 * NODE_SCALE);
+const NODE_CTX_H = Math.round(64 * NODE_SCALE);
+const NODE_PAD_H = Math.round(34 * NODE_SCALE);
+const NODE_SAFETY_H = Math.round(18 * NODE_SCALE);
+const NODE_H = NODE_HEADER_H + NODE_CTX_H + NODE_PAD_H + INSTR_BOX_H + NODE_SAFETY_H;
+
 function edgeStyle(kind: "call" | "fallback" | "ret" | "intra") {
   if (kind === "call") return { strokeWidth: 2.5, stroke: "#2563eb" };
   if (kind === "fallback") return { strokeWidth: 2.5, stroke: "#6b7280", strokeDasharray: "6 6" };
   if (kind === "ret") return { strokeWidth: 2.5, stroke: "#16a34a" };
   return { strokeWidth: 2.5, stroke: "#111827" };
-}
-
-function computeNodeHeight(instrsLen: number) {
-  const header = 44 * NODE_SCALE;
-  const ctxArea = 52 * NODE_SCALE;
-  const padding = 28 * NODE_SCALE;
-  const termExtra = 16 * NODE_SCALE;
-  const lines = Math.max(1, instrsLen);
-  return Math.min(1400, Math.round(header + ctxArea + padding + lines * NODE_LINE_H + termExtra));
-}
-
-function layout(nodes: Node[], edges: Edge[]) {
-  const g = new dagre.graphlib.Graph();
-  g.setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: "TB", nodesep: 50, ranksep: 150 });
-
-  for (const n of nodes) {
-    const w = (n.width as number) || NODE_W;
-    const h = (n.height as number) || 200;
-    g.setNode(n.id, { width: w, height: h });
-  }
-  for (const e of edges) g.setEdge(e.source, e.target);
-
-  dagre.layout(g);
-
-  const laidOut = nodes.map((n) => {
-    const p = g.node(n.id);
-    const w = (n.width as number) || NODE_W;
-    const h = (n.height as number) || 200;
-    return {
-      ...n,
-      position: { x: p.x - w / 2, y: p.y - h / 2 },
-      targetPosition: Position.Top,
-      sourcePosition: Position.Bottom,
-    };
-  });
-
-  return { nodes: laidOut, edges };
 }
 
 function loadBpMap(): Record<string, boolean> {
@@ -108,6 +78,70 @@ function saveBpMap(m: Record<string, boolean>) {
   try {
     localStorage.setItem(BP_LS_KEY, JSON.stringify(m));
   } catch {}
+}
+
+type LayoutInfo = {
+  pos: Record<string, { x: number; y: number }>;
+  edges: { id: string; source: string; target: string; kind: "call" | "fallback" | "ret" | "intra" }[];
+};
+
+function computeLayout(graph: GraphJSON): LayoutInfo {
+  const nodes = graph.nodes || [];
+  const edges = (graph.edges || []).map((e) => ({
+    id: e.id,
+    source: e.source,
+    target: e.target,
+    kind: (e.kind ?? "intra") as "call" | "fallback" | "ret" | "intra",
+  }));
+
+  const nodeCount = nodes.length;
+
+  const sizeFactor = nodeCount > 800 ? 1.15 : nodeCount > 400 ? 1.1 : nodeCount > 200 ? 1.05 : 1.0;
+
+  const baseNodesep = Math.round(Math.max(40, Math.min(95, NODE_W * 0.18)));
+  const baseRanksep = Math.round(Math.max(120, Math.min(260, NODE_H * 0.33)));
+
+  const nodesep = Math.round(baseNodesep * sizeFactor);
+  const ranksep = Math.round(baseRanksep * sizeFactor);
+
+  const g = new dagre.graphlib.Graph();
+  g.setDefaultEdgeLabel(() => ({}));
+
+  g.setGraph({
+    rankdir: "TB",
+    nodesep,
+    ranksep,
+    marginx: 36,
+    marginy: 36,
+    ranker: "longest-path",
+  });
+
+  for (const n of nodes) {
+    g.setNode(n.id, { width: NODE_W, height: NODE_H });
+  }
+
+  for (const e of edges) {
+    g.setEdge(e.source, e.target, { minlen: 1 });
+  }
+
+  dagre.layout(g);
+
+  const pos: Record<string, { x: number; y: number }> = {};
+  for (const n of nodes) {
+    const p = g.node(n.id);
+    pos[n.id] = { x: p.x - NODE_W / 2, y: p.y - NODE_H / 2 };
+  }
+
+  return { pos, edges };
+}
+
+function normalizeQuery(s: string): string {
+  return s.trim().toLowerCase();
+}
+
+function nodeSearchText(n: Node<NodeData>): string {
+  const raw = n.data?.rawLabel ?? "";
+  return `${n.id} ${raw}`.trim();
 }
 
 export default function ICFGViewer() {
@@ -133,6 +167,9 @@ export default function ICFGViewer() {
   const [envItems, setEnvItems] = useState<{ var: string; addr: string }[]>([]);
 
   const [bpMap, setBpMap] = useState<Record<string, boolean>>(() => loadBpMap());
+
+  const [searchText, setSearchText] = useState<string>("");
+  const [activeMatchIdx, setActiveMatchIdx] = useState<number>(0);
 
   useEffect(() => {
     fetch("/icfg")
@@ -197,7 +234,7 @@ export default function ICFGViewer() {
     if (!node) return;
 
     const w = (node.width as number) || NODE_W;
-    const h = (node.height as number) || 200;
+    const h = (node.height as number) || NODE_H;
     const nodeCenterX = node.position.x + w / 2;
     const nodeCenterY = node.position.y + h / 2;
 
@@ -260,60 +297,51 @@ export default function ICFGViewer() {
     ws.onerror = () => setWsStatus("disconnected");
 
     ws.onmessage = async (ev) => {
-  try {
-    const msg = JSON.parse(ev.data) as WLMsg;
-
-    if (msg.type === "breakpoints") {
-      const serverMap: Record<string, boolean> = {};
-      for (const bb of msg.bbs || []) serverMap[bb] = true;
-      saveBpMap(serverMap);
-      setBpMap(serverMap);
-      return;
-    }
-
-    if (msg.type === "done") {
-      // analysis finished: do a final global refresh
       try {
-        await fetchAllStates();
-      } catch {}
+        const msg = JSON.parse(ev.data) as WLMsg;
 
-      try {
-        await fetchEnv();
-      } catch {}
+        if (msg.type === "breakpoints") {
+          const serverMap: Record<string, boolean> = {};
+          for (const bb of msg.bbs || []) serverMap[bb] = true;
+          saveBpMap(serverMap);
+          setBpMap(serverMap);
+          return;
+        }
 
-      // worklist is empty now
-      setWl([]);
-      // keep currentBb/currentCtxt as last known (optional)
-      return;
-    }
+        if (msg.type === "done") {
+          try {
+            await fetchAllStates();
+          } catch {}
+          try {
+            await fetchEnv();
+          } catch {}
+          setWl([]);
+          return;
+        }
 
-    if (msg.type === "worklist") {
-      setCurrentBb(msg.bb);
-      setCurrentCtxt(msg.ctxt);
-      setWl(msg.worklist);
+        if (msg.type === "worklist") {
+          setCurrentBb(msg.bb);
+          setCurrentCtxt(msg.ctxt);
+          setWl(msg.worklist);
 
-      const ran = typeof msg.ran === "number" ? msg.ran : 0;
+          const ran = typeof msg.ran === "number" ? msg.ran : 0;
 
-      // if we jumped more than 1 step (Play), refresh all blocks once
-      try {
-        if (ran > 1) {
-          await fetchAllStates();
+          try {
+            if (ran > 1) await fetchAllStates();
+          } catch {}
+
+          try {
+            const contexts = await fetchStatesForBb(msg.bb);
+            setSelBb((prev) => (prev ? prev : msg.bb));
+            selectBestContext(msg.bb, contexts, msg.ctxt);
+          } catch {}
+
+          try {
+            await fetchEnv();
+          } catch {}
         }
       } catch {}
-
-      // ensure current block is present (also covers ran <= 1)
-      try {
-        const contexts = await fetchStatesForBb(msg.bb);
-        setSelBb((prev) => (prev ? prev : msg.bb));
-        selectBestContext(msg.bb, contexts, msg.ctxt);
-      } catch {}
-
-      try {
-        await fetchEnv();
-      } catch {}
-    }
-  } catch {}
-};
+    };
 
     return () => {
       ws.close();
@@ -331,7 +359,7 @@ export default function ICFGViewer() {
 
     try {
       const contexts = ctxMap[bb] ?? (await fetchStatesForBb(bb));
-      const preferred = bb === currentBb ? currentCtxt : (contexts[0]?.ctxt ?? "");
+      const preferred = bb === currentBb ? currentCtxt : contexts[0]?.ctxt ?? "";
       selectBestContext(bb, contexts, preferred);
     } catch {
       setSelCtxt("");
@@ -350,11 +378,16 @@ export default function ICFGViewer() {
     setSelEntries(hit.entries);
   };
 
-  const rf = useMemo(() => {
-    if (!graph) return { nodes: [] as Node[], edges: [] as Edge[] };
+  const layoutInfo = useMemo<LayoutInfo | null>(() => {
+    if (!graph) return null;
+    return computeLayout(graph);
+  }, [graph]);
 
-    const nodes: Node[] = (graph.nodes || []).map((n) => {
-      const label = n.label ?? n.id;
+  const rf = useMemo(() => {
+    if (!graph || !layoutInfo) return { nodes: [] as Node<NodeData>[], edges: [] as Edge[] };
+
+    const nodes: Node<NodeData>[] = (graph.nodes || []).map((n) => {
+      const labelText = n.label ?? n.id;
       const instrs = Array.isArray(n.instrs) ? n.instrs : [];
       const isCurrent = currentBb !== "" && n.id === currentBb;
       const isSelected = selBb !== "" && n.id === selBb;
@@ -390,7 +423,7 @@ export default function ICFGViewer() {
           </div>
         );
 
-      const h = computeNodeHeight(instrs.length);
+      const p = layoutInfo.pos[n.id] ?? { x: 0, y: 0 };
 
       const border = isCurrent
         ? "3px solid #ef4444"
@@ -411,6 +444,7 @@ export default function ICFGViewer() {
       return {
         id: n.id,
         data: {
+          rawLabel: labelText,
           label: (
             <div style={{ fontFamily: "monospace", textAlign: "left" }}>
               <div
@@ -431,7 +465,7 @@ export default function ICFGViewer() {
                     flex: 1,
                   }}
                 >
-                  {label}
+                  {labelText}
                 </div>
 
                 <label
@@ -468,6 +502,11 @@ export default function ICFGViewer() {
                   whiteSpace: "pre-wrap",
                   wordBreak: "break-word",
                   textAlign: "left",
+                  maxHeight: INSTR_BOX_H,
+                  overflowY: "auto",
+                  border: "1px solid #e5e7eb",
+                  borderRadius: 8,
+                  padding: 10,
                 }}
               >
                 {instrs.length > 0 ? instrs.join("\n") : "(no instruction data yet)"}
@@ -475,9 +514,9 @@ export default function ICFGViewer() {
             </div>
           ),
         },
-        position: { x: 0, y: 0 },
+        position: p,
         width: NODE_W,
-        height: h,
+        height: NODE_H,
         style: {
           border,
           borderRadius: 10,
@@ -486,16 +525,93 @@ export default function ICFGViewer() {
           background: "#ffffff",
           boxShadow: shadow,
         },
+        targetPosition: Position.Top,
+        sourcePosition: Position.Bottom,
       };
     });
 
-    const edges: Edge[] = (graph.edges || []).map((e) => {
-      const kind: "call" | "fallback" | "ret" | "intra" = e.kind ?? "intra";
-      return { id: e.id, source: e.source, target: e.target, style: edgeStyle(kind) };
-    });
+    const edges: Edge[] = layoutInfo.edges.map((e) => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      style: edgeStyle(e.kind),
+    }));
 
-    return layout(nodes, edges);
-  }, [graph, currentBb, selBb, ctxMap, selCtxt, bpMap]);
+    return { nodes, edges };
+  }, [graph, layoutInfo, currentBb, selBb, ctxMap, selCtxt, bpMap]);
+
+  const matchedNodeIds = useMemo(() => {
+    const q = normalizeQuery(searchText);
+    if (!q) return [];
+    return rf.nodes
+      .filter((n) => nodeSearchText(n as Node<NodeData>).toLowerCase().includes(q))
+      .map((n) => n.id);
+  }, [searchText, rf.nodes]);
+
+  useEffect(() => {
+    setActiveMatchIdx(0);
+  }, [searchText]);
+
+  const activeMatchId =
+    matchedNodeIds.length > 0 ? matchedNodeIds[Math.min(activeMatchIdx, matchedNodeIds.length - 1)] : null;
+
+  const focusNodeById = useCallback(
+    (id: string) => {
+      if (!rfInstance) return;
+      if (!id) return;
+      centerNodeBetweenPanels(id, rf.nodes);
+    },
+    [rfInstance, rf.nodes]
+  );
+
+  const gotoActiveMatch = useCallback(() => {
+    if (!activeMatchId) return;
+    focusNodeById(activeMatchId);
+  }, [activeMatchId, focusNodeById]);
+
+  const gotoPrevMatch = useCallback(() => {
+    if (matchedNodeIds.length === 0) return;
+    setActiveMatchIdx((i) => {
+      const ni = (i - 1 + matchedNodeIds.length) % matchedNodeIds.length;
+      const id = matchedNodeIds[ni];
+      if (id) focusNodeById(id);
+      return ni;
+    });
+  }, [matchedNodeIds, focusNodeById]);
+
+  const gotoNextMatch = useCallback(() => {
+    if (matchedNodeIds.length === 0) return;
+    setActiveMatchIdx((i) => {
+      const ni = (i + 1) % matchedNodeIds.length;
+      const id = matchedNodeIds[ni];
+      if (id) focusNodeById(id);
+      return ni;
+    });
+  }, [matchedNodeIds, focusNodeById]);
+
+  const nodesForRender = useMemo(() => {
+    const q = normalizeQuery(searchText);
+    if (!q) return rf.nodes;
+
+    const matchSet = new Set(matchedNodeIds);
+    const active = activeMatchId;
+
+    return rf.nodes.map((n) => {
+      if (!matchSet.has(n.id)) return n;
+
+      const isActive = active === n.id;
+      const prevStyle = (n.style ?? {}) as React.CSSProperties;
+
+      return {
+        ...n,
+        style: {
+          ...prevStyle,
+          outline: isActive ? "3px solid rgba(17,24,39,0.95)" : "2px solid rgba(17,24,39,0.6)",
+          outlineOffset: 2,
+        },
+      };
+    });
+  }, [rf.nodes, searchText, matchedNodeIds, activeMatchId]);
 
   useEffect(() => {
     if (!rfInstance || !currentBb) return;
@@ -508,8 +624,11 @@ export default function ICFGViewer() {
   }, [rfInstance, selBb, rf.nodes]);
 
   useEffect(() => {
-    if (rfInstance && rf.nodes.length > 0) rfInstance.fitView({ padding: 0.2 });
-  }, [rfInstance, rf.nodes.length]);
+    if (!rfInstance) return;
+    if (!graph) return;
+    if (rf.nodes.length === 0) return;
+    rfInstance.fitView({ padding: 0.12 });
+  }, [rfInstance, !!graph]);
 
   if (!graph && !err) return <div style={{ padding: 16, fontFamily: "monospace" }}>Loading /icfg...</div>;
   if (err)
@@ -526,7 +645,20 @@ export default function ICFGViewer() {
   const LEFT_PANEL_W = Math.round(430 * UI_SCALE);
   const RIGHT_PANEL_W = Math.round(820 * UI_SCALE);
 
+  const MINIMAP_W = 440;
+  const MINIMAP_H = 320;
+  const MINIMAP_LEFT = 0;
+  const MINIMAP_BOTTOM = 0;
+
   const bpList = Object.keys(bpMap).filter((k) => bpMap[k]);
+
+  const miniNodeColor = (n: any) => {
+    const id = String(n.id ?? "");
+    if (id && id === currentBb) return "#ef4444";
+    if (id && id === selBb) return "#2563eb";
+    if (id && bpMap[id]) return "#f59e0b";
+    return "#9ca3af";
+  };
 
   return (
     <div style={{ width: "100vw", height: "100vh" }}>
@@ -590,7 +722,6 @@ export default function ICFGViewer() {
                     style={{ fontSize: panelSmall }}
                     onClick={() => setBreakpoint(x, false)}
                     disabled={wsStatus !== "connected"}
-                    title="Remove breakpoint"
                   >
                     x
                   </button>
@@ -624,6 +755,72 @@ export default function ICFGViewer() {
               ))
             )}
           </div>
+        </div>
+
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontWeight: 700 }}>Search</div>
+
+          <input
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") gotoActiveMatch();
+              if (e.key === "ArrowUp") gotoPrevMatch();
+              if (e.key === "ArrowDown") gotoNextMatch();
+              if (e.key === "Escape") setSearchText("");
+            }}
+            placeholder="Search by block id / label"
+            style={{
+              width: "100%",
+              boxSizing: "border-box",
+              marginTop: 8,
+              padding: "8px 10px",
+              borderRadius: 8,
+              border: "1px solid rgba(0,0,0,0.2)",
+              fontSize: panelSmall,
+              fontFamily: "monospace",
+            }}
+          />
+
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+              marginTop: 8,
+            }}
+          >
+            <div style={{ fontSize: panelSmall, opacity: 0.85 }}>
+              {matchedNodeIds.length === 0 ? "0 matches" : `${matchedNodeIds.length} matches`}
+              {activeMatchId ? ` (selected: ${activeMatchIdx + 1}/${matchedNodeIds.length})` : ""}
+            </div>
+
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                type="button"
+                onClick={gotoPrevMatch}
+                disabled={matchedNodeIds.length === 0}
+                style={{ padding: "6px 10px", borderRadius: 8, fontSize: panelSmall }}
+              >
+                Prev
+              </button>
+              <button
+                type="button"
+                onClick={gotoNextMatch}
+                disabled={matchedNodeIds.length === 0}
+                style={{ padding: "6px 10px", borderRadius: 8, fontSize: panelSmall }}
+              >
+                Next
+              </button>
+            </div>
+          </div>
+
+          {activeMatchId && (
+            <div style={{ marginTop: 8, fontSize: panelSmall, opacity: 0.85, wordBreak: "break-all" }}>
+              Active: {activeMatchId}
+            </div>
+          )}
         </div>
       </div>
 
@@ -713,9 +910,29 @@ export default function ICFGViewer() {
         </div>
       </div>
 
-      <ReactFlow nodes={rf.nodes} edges={rf.edges} onInit={setRfInstance} onNodeClick={onNodeClick}>
+      <ReactFlow nodes={nodesForRender} edges={rf.edges} onInit={setRfInstance} onNodeClick={onNodeClick}>
         <Background />
         <Controls />
+
+        <MiniMap
+          style={{
+            position: "fixed",
+            left: MINIMAP_LEFT,
+            bottom: MINIMAP_BOTTOM,
+            width: MINIMAP_W,
+            height: MINIMAP_H,
+            background: "#ffffff",
+            border: "1px solid #d1d5db",
+            borderRadius: 10,
+            zIndex: 9998,
+          }}
+          nodeColor={miniNodeColor}
+          nodeStrokeColor="#111827"
+          nodeBorderRadius={6}
+          maskColor="rgba(0,0,0,0.12)"
+          pannable
+          zoomable
+        />
       </ReactFlow>
     </div>
   );
