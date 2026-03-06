@@ -77,7 +77,12 @@ struct
     | `Assoc kv -> `Assoc (("ran", `Int ran) :: ("reason", `String reason) :: kv)
     | _ -> j
 
-  let start ~(runtime : A.runtime) ~(interface : string) ~(port : int) : unit =
+  let start
+      ~(extra_routes : Dream.route list)
+      ~(runtime : A.runtime)
+      ~(interface : string)
+      ~(port : int)
+      : unit =
     Printexc.record_backtrace true;
 
     let conn_counter = ref 0 in
@@ -314,11 +319,12 @@ struct
     Dream.run ~interface ~port
     @@ Dream.logger
     @@ Dream.router
-         [
-           Dream.get "/icfg" (fun _req -> Dream.json (A.get_icfg_json ()));
-           Dream.get "/state" state_handler;
-           Dream.get "/states" states_handler;
-           Dream.get "/env" (fun _req -> Dream.json (Yojson.Safe.to_string (env_json ())));
-           Dream.get "/ws" (fun _req -> Dream.websocket on_websocket);
-         ]
+         ([
+            Dream.get "/icfg" (fun _req -> Dream.json (A.get_icfg_json ()));
+            Dream.get "/state" state_handler;
+            Dream.get "/states" states_handler;
+            Dream.get "/env" (fun _req -> Dream.json (Yojson.Safe.to_string (env_json ())));
+            Dream.get "/ws" (fun _req -> Dream.websocket on_websocket);
+          ]
+         @ extra_routes)
 end

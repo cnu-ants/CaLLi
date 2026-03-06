@@ -17,6 +17,19 @@ let get_int_arg (key : string) ~(default : int) : int =
   | None -> default
   | Some s -> (try int_of_string s with _ -> default)
 
+let get_env_opt (key : string) : string option =
+  try Some (Sys.getenv key) with Not_found -> None
+
+let get_calli_home () : string =
+  match get_arg_value "--calli-home" with
+  | Some s -> s
+  | None -> (
+      match get_env_opt "CALLI_HOME" with
+      | Some s -> s
+      | None ->
+          failwith "missing --calli-home <CaLLi root> or environment variable CALLI_HOME"
+    )
+
 let () =
   let _ = Init.init () in
   let _ = Init.transform_call () in
@@ -56,8 +69,10 @@ let () =
   let entry = Bbpool.find target_f.entry !Bbpool.pool in
 
   if web_enabled then (
+    let calli_home = get_calli_home () in
+
     let module Analyzer = LlvmWebAnalyzer.Make (AbsValue) (AbsMemory) (Ctxt) (States) (TF) in
-    let module Web = Monitor_server.Make (Analyzer) in
+    let module Web = Monitor_web.Make (Analyzer) in
 
     Analyzer.LoopCounter.set_max_count 30;
 
@@ -65,7 +80,13 @@ let () =
     let init_states = States.update (entry, Ctxt.empty ()) init_mem States.empty in
     let rt = Analyzer.init_runtime ~entry ~init_states in
 
-    Web.start ~runtime:rt ~interface ~port
+    let frontend =
+      if has_flag "--no-frontend" then Web.Disabled
+      else if has_flag "--frontend-dev" then Web.Dev
+      else Web.Static
+    in
+
+    Web.start ~frontend ~calli_home ~runtime:rt ~interface ~port ()
   ) else (
     let module Analyzer = LlvmAnalyzer.Make (AbsValue) (AbsMemory) (Ctxt) (States) (TF) in
 
