@@ -34,10 +34,33 @@ type EnvResp = { items: { var: string; addr: string }[] };
 
 type NodeData = { label: React.ReactNode; rawLabel: string };
 
+const DEBUG = true;
+
+function ts(): string {
+  const d = new Date();
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  const ms = String(d.getMilliseconds()).padStart(3, "0");
+  return `${hh}:${mm}:${ss}.${ms}`;
+}
+
+function dbg(...args: any[]) {
+  if (!DEBUG) return;
+  // eslint-disable-next-line no-console
+  console.log(`[${ts()}]`, ...args);
+}
+
+async function fetchJson<T>(url: string): Promise<T> {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return (await r.json()) as T;
+}
+
 const NODE_W = 420;
 
-const UI_SCALE = 1.5;
-const NODE_SCALE = 1.25;
+const UI_SCALE = 1.0;
+const NODE_SCALE = 1.0;
 
 const NODE_TITLE_FS = Math.round(15 * NODE_SCALE);
 const NODE_BODY_FS = Math.round(13 * NODE_SCALE);
@@ -58,6 +81,9 @@ const NODE_CTX_H = Math.round(64 * NODE_SCALE);
 const NODE_PAD_H = Math.round(34 * NODE_SCALE);
 const NODE_SAFETY_H = Math.round(18 * NODE_SCALE);
 const NODE_H = NODE_HEADER_H + NODE_CTX_H + NODE_PAD_H + INSTR_BOX_H + NODE_SAFETY_H;
+
+const MIN_ZOOM = 0.02;
+const MAX_ZOOM = 2.0;
 
 function edgeStyle(kind: "call" | "fallback" | "ret" | "intra") {
   if (kind === "call") return { strokeWidth: 2.5, stroke: "#2563eb" };
@@ -121,6 +147,10 @@ type LayoutInfo = {
   edges: { id: string; source: string; target: string; kind: "call" | "fallback" | "ret" | "intra" }[];
 };
 
+function clamp(n: number, lo: number, hi: number) {
+  return Math.max(lo, Math.min(hi, n));
+}
+
 function computeLayout(graph: GraphJSON): LayoutInfo {
   const nodes = graph.nodes || [];
   const edges = (graph.edges || []).map((e) => ({
@@ -131,23 +161,26 @@ function computeLayout(graph: GraphJSON): LayoutInfo {
   }));
 
   const nodeCount = nodes.length;
-  const sizeFactor = nodeCount > 800 ? 1.15 : nodeCount > 400 ? 1.1 : nodeCount > 200 ? 1.05 : 1.0;
 
-  const baseNodesep = Math.round(Math.max(40, Math.min(95, NODE_W * 0.18)));
-  const baseRanksep = Math.round(Math.max(120, Math.min(260, NODE_H * 0.33)));
+  const tightFactor =
+    nodeCount > 1200 ? 0.55 : nodeCount > 800 ? 0.62 : nodeCount > 400 ? 0.72 : nodeCount > 200 ? 0.82 : 0.9;
 
-  const nodesep = Math.round(baseNodesep * sizeFactor);
-  const ranksep = Math.round(baseRanksep * sizeFactor);
+  const baseNodesep = Math.round(clamp(NODE_W * 0.06, 14, 44));
+  const baseRanksep = Math.round(clamp(NODE_H * 0.06, 22, 96));
+
+  const nodesep = Math.round(clamp(baseNodesep * tightFactor, 10, 60));
+  const ranksep = Math.round(clamp(baseRanksep * tightFactor, 16, 140));
 
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
+
   g.setGraph({
     rankdir: "TB",
     nodesep,
     ranksep,
-    marginx: 36,
-    marginy: 36,
-    ranker: "longest-path",
+    marginx: 18,
+    marginy: 18,
+    ranker: "tight-tree",
   });
 
   for (const n of nodes) g.setNode(n.id, { width: NODE_W, height: NODE_H });
@@ -173,6 +206,16 @@ function nodeSearchText(n: Node<NodeData>): string {
   return `${n.id} ${raw}`.trim();
 }
 
+function mkKey(bb: string, ctxt: string): string {
+  return `${bb}||${ctxt}`;
+}
+
+function entriesToMap(entries: { addr: string; value: string }[]): Record<string, string> {
+  const m: Record<string, string> = {};
+  for (const e of entries) m[e.addr] = e.value;
+  return m;
+}
+
 export default function ICFGViewer() {
   const [graph, setGraph] = useState<GraphJSON | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -180,6 +223,8 @@ export default function ICFGViewer() {
   const [rfInstance, setRfInstance] = useState<ReactFlowInstance | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
+  const wsConnIdRef = useRef<number>(0);
+  const [wsConnId, setWsConnId] = useState<number>(0);
   const [wsStatus, setWsStatus] = useState<"disconnected" | "connecting" | "connected">("connecting");
 
   const [wl, setWl] = useState<string[]>([]);
@@ -202,8 +247,15 @@ export default function ICFGViewer() {
   const [envCollapsed, setEnvCollapsed] = useState<boolean>(() => loadBool(UI_ENV_COLLAPSED_KEY, false));
   const [stateCollapsed, setStateCollapsed] = useState<boolean>(() => loadBool(UI_STATE_COLLAPSED_KEY, false));
 
-  const defaultRightPanelW = Math.round(820 * UI_SCALE);
-  const [rightPanelW, setRightPanelW] = useState<number>(() => loadNum(UI_RIGHT_PANEL_W_KEY, defaultRightPanelW));
+  const defaultRightPanelW = Math.round(680 * UI_SCALE);
+  const [rightPanelW, setRightPanelW] = useState<number>(() => {
+    const stored = loadNum(UI_RIGHT_PANEL_W_KEY, defaultRightPanelW);
+    const migrated = stored > 1000 ? Math.round(stored * 0.67) : stored;
+
+    const minW = Math.round(380 * UI_SCALE);
+    const maxW = Math.max(minW, Math.round(window.innerWidth * 0.65));
+    return clamp(migrated, minW, maxW);
+  });
 
   const [envQuery, setEnvQuery] = useState<string>("");
   const [stateAddrQuery, setStateAddrQuery] = useState<string>("");
@@ -215,6 +267,22 @@ export default function ICFGViewer() {
   const resizingRef = useRef<boolean>(false);
   const resizeStartXRef = useRef<number>(0);
   const resizeStartWRef = useRef<number>(0);
+
+  const prevStateRef = useRef<Record<string, Record<string, string>>>({});
+  const [changedAddrsByKey, setChangedAddrsByKey] = useState<Record<string, Record<string, boolean>>>({});
+
+  const msgSerialRef = useRef<number>(0);
+  const latestMsgSerialRef = useRef<number>(0);
+
+  const restartEpochRef = useRef<number>(0);
+  const [restartEpoch, setRestartEpoch] = useState<number>(0);
+  const pendingRestartRef = useRef<boolean>(false);
+
+  const [restartProbe, setRestartProbe] = useState<string>("(n/a)");
+  const [droppedWhileRestart, setDroppedWhileRestart] = useState<number>(0);
+
+  const cmdQueueRef = useRef<Array<"play" | "step">>([]);
+  const inFlightRef = useRef<null | "play" | "step" | "restart">(null);
 
   useEffect(() => {
     fetch("/icfg")
@@ -232,34 +300,83 @@ export default function ICFGViewer() {
       });
   }, []);
 
-  const fetchStatesForBb = async (bb: string) => {
-    const r = await fetch(`/state?bb=${encodeURIComponent(bb)}`);
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const j = (await r.json()) as StateResp;
-    setCtxMap((prev) => ({ ...prev, [bb]: j.contexts }));
-    return j.contexts;
-  };
+  const sendWs = useCallback((connId: number, obj: any) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      dbg(`[ws#${connId}] send dropped (not open)`, obj);
+      return false;
+    }
+    const s = JSON.stringify(obj);
+    dbg(`[ws#${connId}] send`, s);
+    ws.send(s);
+    return true;
+  }, []);
 
-  const fetchAllStates = async () => {
-    const r = await fetch("/states");
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const j = (await r.json()) as StatesResp;
-    const items = Array.isArray(j.items) ? j.items : [];
-    setCtxMap((prev) => {
-      const next = { ...prev };
-      for (const it of items) next[it.bb] = it.contexts;
-      return next;
-    });
-  };
+  const syncBpsToServer = useCallback(
+    (connId: number) => {
+      const m = loadBpMap();
+      const bbs = Object.keys(m).filter((k) => m[k]);
+      sendWs(connId, { cmd: "bp_sync", bbs });
+    },
+    [sendWs]
+  );
 
-  const fetchEnv = async () => {
-    const r = await fetch("/env");
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const j = (await r.json()) as EnvResp;
-    setEnvItems(j.items || []);
-  };
+  const resetUiForRestart = useCallback(() => {
+    setWl([]);
+    setCurrentBb("");
+    setCurrentCtxt("");
+    setCtxMap({});
+    setSelBb("");
+    setSelCtxt("");
+    setSelEntries([]);
+    setSelIsBot(false);
+    setEnvItems([]);
+    setSearchText("");
+    setActiveMatchIdx(0);
+    setEnvQuery("");
+    setStateAddrQuery("");
+    setHighlightAddr("");
+    prevStateRef.current = {};
+    setChangedAddrsByKey({});
+  }, []);
 
-  const selectBestContext = (bb: string, contexts: StateResp["contexts"], preferredCtxt: string) => {
+  const updateDeltaForVisited = useCallback((bb: string, ctxt: string, contexts: StateResp["contexts"]) => {
+  const hit = contexts.find((c) => c.ctxt === ctxt);
+  if (!hit) return;
+
+  const key = mkKey(bb, ctxt);
+  const newMap = entriesToMap(hit.entries || []);
+
+  const hasPrev = Object.prototype.hasOwnProperty.call(prevStateRef.current, key);
+
+  // First time we ever see this (bb, ctxt): treat as baseline, show as normal (black)
+  if (!hasPrev) {
+    prevStateRef.current[key] = newMap;
+    setChangedAddrsByKey((prev) => ({
+      ...prev,
+      [key]: {}, // no highlights on first snapshot
+    }));
+    return;
+  }
+
+  const oldMap = prevStateRef.current[key] ?? {};
+  const changed: Record<string, boolean> = {};
+
+  for (const addr of Object.keys(newMap)) {
+    const nv = newMap[addr];
+    const ov = oldMap[addr];
+    if (ov !== nv) changed[addr] = true;
+  }
+
+  prevStateRef.current[key] = newMap;
+
+  setChangedAddrsByKey((prev) => ({
+    ...prev,
+    [key]: changed,
+  }));
+}, []);
+
+  const selectBestContext = useCallback((bb: string, contexts: StateResp["contexts"], preferredCtxt: string) => {
     setSelBb(bb);
     if (contexts.length === 0) {
       setSelCtxt("");
@@ -271,7 +388,372 @@ export default function ICFGViewer() {
     setSelCtxt(hit.ctxt);
     setSelIsBot(hit.is_bot);
     setSelEntries(hit.entries);
-  };
+  }, []);
+
+  async function fetchStatesForBb(bb: string, serial: number, connId: number): Promise<StateResp["contexts"] | null> {
+    dbg(`[ws#${connId}] http GET /state`, bb, `serial=${serial} epoch=${restartEpochRef.current}`);
+    try {
+      const j = await fetchJson<StateResp>(`/state?bb=${encodeURIComponent(bb)}`);
+      if (latestMsgSerialRef.current !== serial) {
+        dbg(`[ws#${connId}] drop stale /state`, `serial=${serial} now=${latestMsgSerialRef.current}`);
+        return null;
+      }
+      setCtxMap((prev) => ({ ...prev, [bb]: j.contexts }));
+      return j.contexts;
+    } catch (e) {
+      dbg(`[ws#${connId}] /state failed`, String(e));
+      return null;
+    }
+  }
+
+  async function fetchAllStates(serial: number, connId: number): Promise<StateResp[] | null> {
+    dbg(`[ws#${connId}] http GET /states`, `serial=${serial} epoch=${restartEpochRef.current}`);
+    try {
+      const j = await fetchJson<StatesResp>("/states");
+      if (latestMsgSerialRef.current !== serial) {
+        dbg(`[ws#${connId}] drop stale /states`, `serial=${serial} now=${latestMsgSerialRef.current}`);
+        return null;
+      }
+      const items = Array.isArray(j.items) ? j.items : [];
+      setCtxMap((prev) => {
+        const next = { ...prev };
+        for (const it of items) next[it.bb] = it.contexts;
+        return next;
+      });
+      return items;
+    } catch (e) {
+      dbg(`[ws#${connId}] /states failed`, String(e));
+      return null;
+    }
+  }
+
+  async function fetchEnv(serial: number, connId: number): Promise<{ var: string; addr: string }[] | null> {
+    dbg(`[ws#${connId}] http GET /env`, `serial=${serial} epoch=${restartEpochRef.current}`);
+    try {
+      const j = await fetchJson<EnvResp>("/env");
+      if (latestMsgSerialRef.current !== serial) {
+        dbg(`[ws#${connId}] drop stale /env`, `serial=${serial} now=${latestMsgSerialRef.current}`);
+        return null;
+      }
+      setEnvItems(j.items || []);
+      return j.items || [];
+    } catch (e) {
+      dbg(`[ws#${connId}] /env failed`, String(e));
+      return null;
+    }
+  }
+
+  async function runRestartProbe(serial: number, connId: number) {
+    const items = await fetchAllStates(serial, connId);
+    const env = await fetchEnv(serial, connId);
+    if (!items || !env) return;
+
+    const itemCount = items.length;
+    const ctxCount = items.reduce((acc, it) => acc + (it.contexts?.length ?? 0), 0);
+
+    const nonBotNonEmpty = items.flatMap((it) =>
+      (it.contexts || [])
+        .filter((c) => !c.is_bot && (c.entries?.length ?? 0) > 0)
+        .map((c) => ({ bb: it.bb, ctxt: c.ctxt, n: c.entries.length }))
+    );
+
+    const top = nonBotNonEmpty
+      .sort((a, b) => b.n - a.n)
+      .slice(0, 8)
+      .map((x) => `${x.bb}::${x.ctxt}(${x.n})`);
+
+    const probe = `epoch=${restartEpochRef.current} items=${itemCount} ctx=${ctxCount} env=${env.length} nonBotNonEmpty=${nonBotNonEmpty.length} top=${JSON.stringify(
+      top
+    )}`;
+
+    dbg(`[ws#${connId}] restart-probe`, probe);
+    setRestartProbe(probe);
+  }
+
+  const pumpCmdQueue = useCallback(
+    (connId: number) => {
+      if (pendingRestartRef.current) return;
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      if (inFlightRef.current !== null) return;
+
+      const next = cmdQueueRef.current.shift();
+      if (!next) return;
+
+      inFlightRef.current = next;
+      dbg(`[ws#${connId}] pump send`, next, `q=${cmdQueueRef.current.length} epoch=${restartEpochRef.current}`);
+      sendWs(connId, { cmd: next });
+    },
+    [sendWs]
+  );
+
+  const sendCmd = useCallback(
+    (cmd: "play" | "step" | "restart") => {
+      const connId = wsConnIdRef.current;
+      dbg(`[ws#${connId}] ui click`, cmd, `wsStatus=${wsStatus} epoch=${restartEpochRef.current}`);
+
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+      if (cmd === "restart") {
+        cmdQueueRef.current = [];
+        inFlightRef.current = "restart";
+
+        pendingRestartRef.current = true;
+        setDroppedWhileRestart(0);
+
+        restartEpochRef.current += 1;
+        setRestartEpoch(restartEpochRef.current);
+
+        resetUiForRestart();
+
+        setRestartProbe("(pending restart ack...)");
+
+        sendWs(connId, { cmd: "restart" });
+        return;
+      }
+
+      if (pendingRestartRef.current) {
+        dbg(`[ws#${connId}] ui ignored (pending restart)`, cmd);
+        return;
+      }
+
+      cmdQueueRef.current.push(cmd);
+      pumpCmdQueue(connId);
+    },
+    [pumpCmdQueue, resetUiForRestart, sendWs, wsStatus]
+  );
+
+  const setBreakpoint = useCallback(
+    (bb: string, enabled: boolean) => {
+      setBpMap((prev) => {
+        const next = { ...prev, [bb]: enabled };
+        saveBpMap(next);
+
+        const connId = wsConnIdRef.current;
+        sendWs(connId, { cmd: "bp_set", bb, enabled });
+
+        return next;
+      });
+    },
+    [sendWs]
+  );
+
+  useEffect(() => {
+    let stopped = false;
+    let reconnectTimer: number | null = null;
+    let backoffMs = 250;
+
+    const connect = () => {
+      if (stopped) return;
+
+      const connId = (wsConnIdRef.current = wsConnIdRef.current + 1);
+      setWsConnId(connId);
+
+      const proto = window.location.protocol === "https:" ? "wss" : "ws";
+      const wsUrl = `${proto}://${window.location.host}/ws`;
+
+      dbg(`[ws#${connId}] connect url=${wsUrl}`);
+      setWsStatus("connecting");
+
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        dbg(`[ws#${connId}] onopen readyState=${ws.readyState}`);
+        setWsStatus("connected");
+        backoffMs = 250;
+
+        inFlightRef.current = null;
+        cmdQueueRef.current = [];
+
+        pendingRestartRef.current = false;
+        setDroppedWhileRestart(0);
+        setRestartProbe("(n/a)");
+
+        syncBpsToServer(connId);
+      };
+
+      ws.onerror = (ev) => {
+        dbg(`[ws#${connId}] onerror`, ev);
+      };
+
+      ws.onclose = (ev) => {
+        dbg(`[ws#${connId}] onclose code=${ev.code} reason=${ev.reason} wasClean=${ev.wasClean}`);
+        setWsStatus("disconnected");
+        if (wsRef.current === ws) wsRef.current = null;
+
+        inFlightRef.current = null;
+
+        if (stopped) return;
+        if (reconnectTimer !== null) return;
+
+        const delay = backoffMs;
+        backoffMs = Math.min(backoffMs * 2, 3000);
+
+        dbg(`[ws#${connId}] schedule reconnect in ${delay}ms`);
+        reconnectTimer = window.setTimeout(() => {
+          reconnectTimer = null;
+          connect();
+        }, delay);
+      };
+
+      ws.onmessage = async (ev) => {
+        const raw = typeof ev.data === "string" ? ev.data : "";
+        dbg(`[ws#${connId}] onmessage len=${raw.length}`);
+
+        let msg: WLMsg | null = null;
+        try {
+          msg = JSON.parse(raw) as WLMsg;
+        } catch (e) {
+          dbg(`[ws#${connId}] parse error`, String(e));
+          return;
+        }
+
+        const mtype = (msg as any)?.type;
+        dbg(`[ws#${connId}] msg.type=${mtype}`);
+
+        if (mtype === "breakpoints") {
+          const bmsg = msg as any as { type: "breakpoints"; bbs: string[] };
+          const serverMap: Record<string, boolean> = {};
+          for (const bb of bmsg.bbs || []) serverMap[bb] = true;
+          saveBpMap(serverMap);
+          setBpMap(serverMap);
+          return;
+        }
+
+        const serial = (msgSerialRef.current += 1);
+        latestMsgSerialRef.current = serial;
+
+        const finishInflight = () => {
+          if (inFlightRef.current !== null) {
+            dbg(`[ws#${connId}] inflight done`, inFlightRef.current);
+            inFlightRef.current = null;
+          }
+          pumpCmdQueue(connId);
+        };
+
+        if (mtype === "error") {
+          const emsg = msg as any as { type: "error"; msg: string };
+          dbg(`[ws#${connId}] server error`, emsg.msg);
+          finishInflight();
+          return;
+        }
+
+        if (mtype === "done") {
+          const dmsg = msg as any as { type: "done"; ran?: number; reason?: string };
+          dbg(`[ws#${connId}] done ran=${dmsg.ran ?? 0} reason=${dmsg.reason ?? ""} serial=${serial} epoch=${restartEpochRef.current}`);
+
+          if (pendingRestartRef.current) {
+            setDroppedWhileRestart((x) => x + 1);
+            dbg(`[ws#${connId}] drop done (pending restart)`);
+            finishInflight();
+            return;
+          }
+
+          await fetchAllStates(serial, connId);
+          await fetchEnv(serial, connId);
+          if (latestMsgSerialRef.current === serial) setWl([]);
+
+          finishInflight();
+          return;
+        }
+
+        if (mtype === "worklist") {
+          const wmsg = msg as WorklistMsg;
+          dbg(
+            `[ws#${connId}] worklist bb=${wmsg.bb} ctxt=${wmsg.ctxt} ran=${wmsg.ran ?? 0} reason=${wmsg.reason ?? ""} serial=${serial} epoch=${restartEpochRef.current}`
+          );
+
+          const isRestartAck = (wmsg.reason ?? "") === "restart";
+
+          if (pendingRestartRef.current && !isRestartAck) {
+            setDroppedWhileRestart((x) => x + 1);
+            dbg(`[ws#${connId}] drop worklist (pending restart, not ack) reason=${wmsg.reason ?? ""}`);
+            finishInflight();
+            return;
+          }
+
+          setCurrentBb(wmsg.bb);
+          setCurrentCtxt(wmsg.ctxt);
+          setWl(wmsg.worklist);
+
+          const contexts = await fetchStatesForBb(wmsg.bb, serial, connId);
+          if (contexts) {
+            updateDeltaForVisited(wmsg.bb, wmsg.ctxt, contexts);
+            setSelBb((prev) => (prev ? prev : wmsg.bb));
+            selectBestContext(wmsg.bb, contexts, wmsg.ctxt);
+          }
+
+          await fetchEnv(serial, connId);
+
+          if (isRestartAck) {
+            pendingRestartRef.current = false;
+            dbg(`[ws#${connId}] restart ack received epoch=${restartEpochRef.current}`);
+
+            syncBpsToServer(connId);
+            await runRestartProbe(serial, connId);
+          }
+
+          finishInflight();
+          return;
+        }
+      };
+    };
+
+    connect();
+
+    return () => {
+      stopped = true;
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      const ws = wsRef.current;
+      wsRef.current = null;
+      try {
+        ws?.close();
+      } catch {}
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const onNodeClick = useCallback(
+    async (_: any, node: any) => {
+      const bb = node.id as string;
+      setSelBb(bb);
+
+      const serial = (msgSerialRef.current += 1);
+      latestMsgSerialRef.current = serial;
+
+      const connId = wsConnIdRef.current;
+
+      try {
+        const contexts = ctxMap[bb] ?? (await fetchStatesForBb(bb, serial, connId));
+        if (!contexts) return;
+        const preferred = bb === currentBb ? currentCtxt : contexts[0]?.ctxt ?? "";
+        selectBestContext(bb, contexts, preferred);
+      } catch {
+        setSelCtxt("");
+        setSelEntries([]);
+        setSelIsBot(false);
+      }
+    },
+    [ctxMap, currentBb, currentCtxt, selectBestContext]
+  );
+
+  const chooseContext = useCallback(
+    (bb: string, ctxt: string) => {
+      const lst = ctxMap[bb] ?? [];
+      const hit = lst.find((x) => x.ctxt === ctxt);
+      if (!hit) return;
+      setSelBb(bb);
+      setSelCtxt(hit.ctxt);
+      setSelIsBot(hit.is_bot);
+      setSelEntries(hit.entries);
+    },
+    [ctxMap]
+  );
 
   const LEFT_PANEL_W = Math.round(430 * UI_SCALE);
   const M = 16;
@@ -307,149 +789,6 @@ export default function ICFGViewer() {
     },
     [rfInstance, rightPanelW, LEFT_PANEL_W]
   );
-
-  const sendWs = (obj: any) => {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify(obj));
-  };
-
-  const syncBpsToServer = (m: Record<string, boolean>) => {
-    const bbs = Object.keys(m).filter((k) => m[k]);
-    sendWs({ cmd: "bp_sync", bbs });
-  };
-
-  const setBreakpoint = (bb: string, enabled: boolean) => {
-    setBpMap((prev) => {
-      const next = { ...prev, [bb]: enabled };
-      saveBpMap(next);
-      sendWs({ cmd: "bp_set", bb, enabled });
-      return next;
-    });
-  };
-
-  useEffect(() => {
-    const proto = window.location.protocol === "https:" ? "wss" : "ws";
-    const wsUrl = `${proto}://${window.location.host}/ws`;
-
-    setWsStatus("connecting");
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      setWsStatus("connected");
-      syncBpsToServer(loadBpMap());
-    };
-    ws.onclose = () => setWsStatus("disconnected");
-    ws.onerror = () => setWsStatus("disconnected");
-
-    ws.onmessage = async (ev) => {
-      try {
-        const msg = JSON.parse(ev.data) as WLMsg;
-
-        if (msg.type === "breakpoints") {
-          const serverMap: Record<string, boolean> = {};
-          for (const bb of msg.bbs || []) serverMap[bb] = true;
-          saveBpMap(serverMap);
-          setBpMap(serverMap);
-          return;
-        }
-
-        if (msg.type === "done") {
-          try {
-            await fetchAllStates();
-          } catch {}
-          try {
-            await fetchEnv();
-          } catch {}
-          setWl([]);
-          return;
-        }
-
-        if (msg.type === "worklist") {
-          setCurrentBb(msg.bb);
-          setCurrentCtxt(msg.ctxt);
-          setWl(msg.worklist);
-
-          const ran = typeof msg.ran === "number" ? msg.ran : 0;
-
-          try {
-            if (ran > 1) await fetchAllStates();
-          } catch {}
-
-          try {
-            const contexts = await fetchStatesForBb(msg.bb);
-            setSelBb((prev) => (prev ? prev : msg.bb));
-            selectBestContext(msg.bb, contexts, msg.ctxt);
-          } catch {}
-
-          try {
-            await fetchEnv();
-          } catch {}
-        }
-      } catch {}
-    };
-
-    return () => {
-      ws.close();
-      wsRef.current = null;
-    };
-  }, []);
-
-  const resetUiForRestart = useCallback(() => {
-    setWl([]);
-    setCurrentBb("");
-    setCurrentCtxt("");
-    setCtxMap({});
-    setSelBb("");
-    setSelCtxt("");
-    setSelEntries([]);
-    setSelIsBot(false);
-    setEnvItems([]);
-    setSearchText("");
-    setActiveMatchIdx(0);
-    setEnvQuery("");
-    setStateAddrQuery("");
-    setHighlightAddr("");
-  }, []);
-
-  const sendCmd = useCallback(
-    (cmd: "play" | "pause" | "step" | "restart") => {
-      if (cmd === "restart") {
-        resetUiForRestart();
-        sendWs({ cmd: "restart" });
-        syncBpsToServer(loadBpMap());
-        return;
-      }
-      sendWs({ cmd });
-    },
-    [resetUiForRestart]
-  );
-
-  const onNodeClick = async (_: any, node: any) => {
-    const bb = node.id as string;
-    setSelBb(bb);
-
-    try {
-      const contexts = ctxMap[bb] ?? (await fetchStatesForBb(bb));
-      const preferred = bb === currentBb ? currentCtxt : contexts[0]?.ctxt ?? "";
-      selectBestContext(bb, contexts, preferred);
-    } catch {
-      setSelCtxt("");
-      setSelEntries([]);
-      setSelIsBot(false);
-    }
-  };
-
-  const chooseContext = (bb: string, ctxt: string) => {
-    const lst = ctxMap[bb] ?? [];
-    const hit = lst.find((x) => x.ctxt === ctxt);
-    if (!hit) return;
-    setSelBb(bb);
-    setSelCtxt(hit.ctxt);
-    setSelIsBot(hit.is_bot);
-    setSelEntries(hit.entries);
-  };
 
   const layoutInfo = useMemo<LayoutInfo | null>(() => {
     if (!graph) return null;
@@ -588,7 +927,7 @@ export default function ICFGViewer() {
     }));
 
     return { nodes, edges };
-  }, [graph, layoutInfo, currentBb, selBb, ctxMap, selCtxt, bpMap]);
+  }, [graph, layoutInfo, currentBb, selBb, ctxMap, selCtxt, bpMap, chooseContext, setBreakpoint]);
 
   const matchedNodeIds = useMemo(() => {
     const q = normalizeQuery(searchText);
@@ -662,6 +1001,13 @@ export default function ICFGViewer() {
   }, [rf.nodes, searchText, matchedNodeIds, activeMatchId]);
 
   useEffect(() => {
+    if (!rfInstance) return;
+    if (!graph) return;
+    if (rf.nodes.length === 0) return;
+    rfInstance.fitView({ padding: 0.12, minZoom: MIN_ZOOM, maxZoom: MAX_ZOOM });
+  }, [rfInstance, !!graph, rf.nodes.length]);
+
+  useEffect(() => {
     if (!rfInstance || !currentBb) return;
     centerNodeBetweenPanels(currentBb, rf.nodes);
   }, [rfInstance, currentBb, rf.nodes, centerNodeBetweenPanels]);
@@ -671,18 +1017,11 @@ export default function ICFGViewer() {
     centerNodeBetweenPanels(selBb, rf.nodes);
   }, [rfInstance, selBb, rf.nodes, centerNodeBetweenPanels]);
 
-  useEffect(() => {
-    if (!rfInstance) return;
-    if (!graph) return;
-    if (rf.nodes.length === 0) return;
-    rfInstance.fitView({ padding: 0.12 });
-  }, [rfInstance, !!graph]);
-
   const panelFont = Math.round(13 * UI_SCALE);
   const panelSmall = Math.round(12 * UI_SCALE);
 
-  const MINIMAP_W = 440;
-  const MINIMAP_H = 320;
+  const MINIMAP_W = 360;
+  const MINIMAP_H = 260;
   const MINIMAP_LEFT = 0;
   const MINIMAP_BOTTOM = 0;
 
@@ -767,8 +1106,8 @@ export default function ICFGViewer() {
       const nextW = resizeStartWRef.current + dx;
       const minW = Math.round(420 * UI_SCALE);
       const maxW = Math.max(minW, window.innerWidth - LEFT_PANEL_W - M - 80);
-      const clamped = Math.max(minW, Math.min(maxW, nextW));
-      setRightPanelW(clamped);
+      const clampedW = Math.max(minW, Math.min(maxW, nextW));
+      setRightPanelW(clampedW);
     };
 
     const onUp = () => {
@@ -794,6 +1133,11 @@ export default function ICFGViewer() {
       </div>
     );
 
+  const changedKey = selBb && selCtxt ? mkKey(selBb, selCtxt) : "";
+  const changedSet = changedKey ? (changedAddrsByKey[changedKey] ?? {}) : {};
+
+  const disableControls = wsStatus !== "connected" || pendingRestartRef.current;
+
   return (
     <div style={{ width: "100vw", height: "100vh" }}>
       <div
@@ -808,23 +1152,26 @@ export default function ICFGViewer() {
           borderRadius: 10,
           fontFamily: "monospace",
           fontSize: panelFont,
-          width: LEFT_PANEL_W,
+          width: Math.round(430 * UI_SCALE),
         }}
       >
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <button onClick={() => sendCmd("play")} disabled={wsStatus !== "connected"} style={{ fontSize: panelFont }}>
+          <button onClick={() => sendCmd("play")} disabled={disableControls} style={{ fontSize: panelFont }}>
             Play
           </button>
-          <button onClick={() => sendCmd("pause")} disabled={wsStatus !== "connected"} style={{ fontSize: panelFont }}>
-            Pause
-          </button>
-          <button onClick={() => sendCmd("step")} disabled={wsStatus !== "connected"} style={{ fontSize: panelFont }}>
+          <button onClick={() => sendCmd("step")} disabled={disableControls} style={{ fontSize: panelFont }}>
             Step
           </button>
           <button onClick={() => sendCmd("restart")} disabled={wsStatus !== "connected"} style={{ fontSize: panelFont }}>
             Restart
           </button>
-          <span style={{ marginLeft: 10 }}>ws={wsStatus}</span>
+          <span style={{ marginLeft: 10 }}>
+            ws#{wsConnId}={wsStatus} epoch={restartEpoch} pendingRestart={String(pendingRestartRef.current)} dropped={droppedWhileRestart}
+          </span>
+        </div>
+
+        <div style={{ marginTop: 10, fontSize: panelSmall, opacity: 0.85, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+          Restart probe: {restartProbe}
         </div>
 
         <div style={{ marginTop: 12 }}>
@@ -1115,6 +1462,10 @@ export default function ICFGViewer() {
                       <tbody>
                         {filteredStateEntries.map((e, i) => {
                           const isHL = highlightAddr !== "" && e.addr === highlightAddr;
+                          const isChanged = !!changedSet[e.addr];
+
+                          const changedStyle: React.CSSProperties = isChanged ? { color: "#dc2626", fontWeight: 700 } : {};
+
                           return (
                             <tr
                               key={`${e.addr}:${i}`}
@@ -1136,13 +1487,23 @@ export default function ICFGViewer() {
                                   overflow: "hidden",
                                   textOverflow: "ellipsis",
                                   whiteSpace: "nowrap",
+                                  ...changedStyle,
                                 }}
                                 title={e.addr}
                               >
                                 {e.addr}
                               </td>
                               <td style={{ verticalAlign: "top", padding: "8px 0", borderBottom: "1px solid #f3f4f6" }}>
-                                <div style={{ maxWidth: 520, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={e.value}>
+                                <div
+                                  style={{
+                                    maxWidth: 520,
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                    whiteSpace: "nowrap",
+                                    ...changedStyle,
+                                  }}
+                                  title={e.value}
+                                >
                                   {e.value}
                                 </div>
                               </td>
@@ -1159,7 +1520,14 @@ export default function ICFGViewer() {
         </div>
       </div>
 
-      <ReactFlow nodes={nodesForRender} edges={rf.edges} onInit={setRfInstance} onNodeClick={onNodeClick}>
+      <ReactFlow
+        nodes={nodesForRender}
+        edges={rf.edges}
+        onInit={setRfInstance}
+        onNodeClick={onNodeClick}
+        minZoom={MIN_ZOOM}
+        maxZoom={MAX_ZOOM}
+      >
         <Background />
         <Controls />
 
