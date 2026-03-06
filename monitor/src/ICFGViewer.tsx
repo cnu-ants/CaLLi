@@ -71,6 +71,8 @@ const CTX_BTN_PAD_Y = Math.round(4 * NODE_SCALE * 1.2);
 const CTX_BTN_PAD_X = Math.round(10 * NODE_SCALE * 1.2);
 
 const BP_LS_KEY = "calli_breakpoints_v1";
+
+const UI_LEFT_PANEL_W_KEY = "calli_ui_left_panel_w_v1";
 const UI_RIGHT_PANEL_W_KEY = "calli_ui_right_panel_w_v1";
 const UI_ENV_COLLAPSED_KEY = "calli_ui_env_collapsed_v1";
 const UI_STATE_COLLAPSED_KEY = "calli_ui_state_collapsed_v1";
@@ -88,6 +90,10 @@ const NODE_H = NODE_HEADER_H + NODE_CTX_H + NODE_PAD_H + INSTR_BOX_H + NODE_SAFE
 
 const MIN_ZOOM = 0.02;
 const MAX_ZOOM = 2.0;
+
+const LEFT_PANEL_LEFT = 8;
+const RIGHT_PANEL_RIGHT = 8;
+const PANEL_GAP = 16;
 
 function edgeStyle(kind: "call" | "fallback" | "ret" | "intra") {
   if (kind === "call") return { strokeWidth: 2.5, stroke: "#2563eb" };
@@ -278,6 +284,14 @@ export default function ICFGViewer() {
   const [envCollapsed, setEnvCollapsed] = useState<boolean>(() => loadBool(UI_ENV_COLLAPSED_KEY, false));
   const [stateCollapsed, setStateCollapsed] = useState<boolean>(() => loadBool(UI_STATE_COLLAPSED_KEY, false));
 
+  const defaultLeftPanelW = Math.round(430 * UI_SCALE);
+  const [leftPanelW, setLeftPanelW] = useState<number>(() => {
+    const stored = loadNum(UI_LEFT_PANEL_W_KEY, defaultLeftPanelW);
+    const minW = Math.round(320 * UI_SCALE);
+    const maxW = Math.max(minW, Math.round(window.innerWidth * 0.55));
+    return clamp(stored, minW, maxW);
+  });
+
   const defaultRightPanelW = Math.round(680 * UI_SCALE);
   const [rightPanelW, setRightPanelW] = useState<number>(() => {
     const stored = loadNum(UI_RIGHT_PANEL_W_KEY, defaultRightPanelW);
@@ -295,9 +309,13 @@ export default function ICFGViewer() {
   const highlightTimerRef = useRef<number | null>(null);
   const stateRowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
 
-  const resizingRef = useRef<boolean>(false);
-  const resizeStartXRef = useRef<number>(0);
-  const resizeStartWRef = useRef<number>(0);
+  const resizingRightRef = useRef<boolean>(false);
+  const rightResizeStartXRef = useRef<number>(0);
+  const rightResizeStartWRef = useRef<number>(0);
+
+  const resizingLeftRef = useRef<boolean>(false);
+  const leftResizeStartXRef = useRef<number>(0);
+  const leftResizeStartWRef = useRef<number>(0);
 
   const prevStateRef = useRef<Record<string, Record<string, string>>>({});
   const [changedAddrsByKey, setChangedAddrsByKey] = useState<Record<string, Record<string, boolean>>>({});
@@ -801,9 +819,6 @@ export default function ICFGViewer() {
     [ctxMap]
   );
 
-  const LEFT_PANEL_W = Math.round(430 * UI_SCALE);
-  const M = 16;
-
   const centerNodeBetweenPanels = useCallback(
     (bbId: string, nodes: Node[]) => {
       if (!rfInstance) return;
@@ -818,7 +833,10 @@ export default function ICFGViewer() {
       const screenW = window.innerWidth;
       const screenH = window.innerHeight;
 
-      const desiredScreenX = (LEFT_PANEL_W + M + (screenW - rightPanelW - M)) / 2;
+      const leftBound = LEFT_PANEL_LEFT + leftPanelW + PANEL_GAP;
+      const rightBound = screenW - RIGHT_PANEL_RIGHT - rightPanelW - PANEL_GAP;
+
+      const desiredScreenX = (leftBound + rightBound) / 2;
       const desiredScreenY = screenH / 2;
 
       const vp: Viewport =
@@ -833,7 +851,7 @@ export default function ICFGViewer() {
 
       (rfInstance as any).setViewport(nextViewport, { duration: 250 });
     },
-    [rfInstance, rightPanelW, LEFT_PANEL_W]
+    [rfInstance, rightPanelW, leftPanelW]
   );
 
   const layoutInfo = useMemo<LayoutInfo | null>(() => {
@@ -905,28 +923,13 @@ export default function ICFGViewer() {
           rawLabel: labelText,
           label: (
             <div style={{ fontFamily: "monospace", textAlign: "left" }}>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 10,
-                  marginBottom: 10,
-                }}
-              >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 10 }}>
                 <div style={{ fontSize: NODE_TITLE_FS, fontWeight: 700, wordBreak: "break-all", textAlign: "left", flex: 1 }}>
                   {labelText}
                 </div>
 
                 <label
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    fontSize: NODE_BODY_FS,
-                    userSelect: "none",
-                    whiteSpace: "nowrap",
-                  }}
+                  style={{ display: "flex", alignItems: "center", gap: 8, fontSize: NODE_BODY_FS, userSelect: "none", whiteSpace: "nowrap" }}
                   onClick={(ev) => ev.stopPropagation()}
                   title="Breakpoint"
                 >
@@ -1157,26 +1160,53 @@ export default function ICFGViewer() {
   const startResizeRightPanel = (ev: React.MouseEvent) => {
     ev.preventDefault();
     ev.stopPropagation();
-    resizingRef.current = true;
-    resizeStartXRef.current = ev.clientX;
-    resizeStartWRef.current = rightPanelW;
+    resizingRightRef.current = true;
+    rightResizeStartXRef.current = ev.clientX;
+    rightResizeStartWRef.current = rightPanelW;
+  };
+
+  const startResizeLeftPanel = (ev: React.MouseEvent) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    resizingLeftRef.current = true;
+    leftResizeStartXRef.current = ev.clientX;
+    leftResizeStartWRef.current = leftPanelW;
   };
 
   useEffect(() => {
     const onMove = (ev: MouseEvent) => {
-      if (!resizingRef.current) return;
-      const dx = resizeStartXRef.current - ev.clientX;
-      const nextW = resizeStartWRef.current + dx;
-      const minW = Math.round(420 * UI_SCALE);
-      const maxW = Math.max(minW, window.innerWidth - LEFT_PANEL_W - M - 80);
-      const clampedW = Math.max(minW, Math.min(maxW, nextW));
-      setRightPanelW(clampedW);
+      if (resizingRightRef.current) {
+        const dx = rightResizeStartXRef.current - ev.clientX;
+        const nextW = rightResizeStartWRef.current + dx;
+
+        const minW = Math.round(420 * UI_SCALE);
+        const maxW = Math.max(minW, window.innerWidth - leftPanelW - LEFT_PANEL_LEFT - RIGHT_PANEL_RIGHT - PANEL_GAP * 2 - 80);
+
+        const clampedW = Math.max(minW, Math.min(maxW, nextW));
+        setRightPanelW(clampedW);
+      }
+
+      if (resizingLeftRef.current) {
+        const dx = ev.clientX - leftResizeStartXRef.current;
+        const nextW = leftResizeStartWRef.current + dx;
+
+        const minW = Math.round(320 * UI_SCALE);
+        const maxW = Math.max(minW, window.innerWidth - rightPanelW - LEFT_PANEL_LEFT - RIGHT_PANEL_RIGHT - PANEL_GAP * 2 - 80);
+
+        const clampedW = Math.max(minW, Math.min(maxW, nextW));
+        setLeftPanelW(clampedW);
+      }
     };
 
     const onUp = () => {
-      if (!resizingRef.current) return;
-      resizingRef.current = false;
-      saveNum(UI_RIGHT_PANEL_W_KEY, rightPanelW);
+      if (resizingRightRef.current) {
+        resizingRightRef.current = false;
+        saveNum(UI_RIGHT_PANEL_W_KEY, rightPanelW);
+      }
+      if (resizingLeftRef.current) {
+        resizingLeftRef.current = false;
+        saveNum(UI_LEFT_PANEL_W_KEY, leftPanelW);
+      }
     };
 
     window.addEventListener("mousemove", onMove);
@@ -1185,7 +1215,7 @@ export default function ICFGViewer() {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [rightPanelW, LEFT_PANEL_W]);
+  }, [rightPanelW, leftPanelW]);
 
   const changedKey = selBb && selCtxt ? mkKey(selBb, selCtxt) : "";
   const changedSet = changedKey ? (changedAddrsByKey[changedKey] ?? {}) : {};
@@ -1265,17 +1295,6 @@ export default function ICFGViewer() {
     });
   }, [mainTab, activeCodeFunc, scrollToBbInCode]);
 
-  useEffect(() => {
-    if (mainTab !== "code") return;
-
-    if (pendingJumpRef.current) return;
-
-    if (followCurrentCode && currentBb) {
-      pendingJumpRef.current = { bb: currentBb };
-      return;
-    }
-  }, [mainTab, followCurrentCode, currentBb]);
-
   if (!graph && !err) return <div style={{ padding: 16, fontFamily: "monospace" }}>Loading /icfg...</div>;
   if (err)
     return (
@@ -1296,207 +1315,227 @@ export default function ICFGViewer() {
       return pa.x - pb.x;
     });
 
-    const padL = Math.round(LEFT_PANEL_W + 24);
-    const padR = Math.round(rightPanelW + 24);
+    // Fix overlap: account for actual left/right fixed panels + offsets + a safety gap.
+    const padL = LEFT_PANEL_LEFT + leftPanelW + PANEL_GAP + 10;
+    const padR = RIGHT_PANEL_RIGHT + rightPanelW + PANEL_GAP + 10;
+
+
 
     return (
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          overflowY: "auto",
-          paddingLeft: padL,
-          paddingRight: padR,
-          paddingTop: 14,
-          paddingBottom: 14,
-          boxSizing: "border-box",
-          fontFamily: "monospace",
-          background: "#ffffff",
-        }}
-      >
-        <div
-          style={{
-            position: "sticky",
-            top: 0,
-            zIndex: 1,
-            background: "#ffffff",
-            borderBottom: "1px solid #e5e7eb",
-            paddingBottom: 10,
-            marginBottom: 12,
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-            <div style={{ fontWeight: 700 }}>Code</div>
+  <div
+    style={{
+      position: "absolute",
+      inset: 0,
+      display: "flex",
+      flexDirection: "column",
+      paddingLeft: padL,
+      paddingRight: padR,
+      paddingTop: 4,
+      paddingBottom: 8,
+      boxSizing: "border-box",
+      fontFamily: "monospace",
+      background: "#ffffff",
+    }}
+  >
+    <div
+      style={{
+        flex: "0 0 auto",
+        background: "#ffffff",
+        borderBottom: "1px solid #e5e7eb",
+        paddingTop: 2,
+        paddingBottom: 8,
+        marginBottom: 8,
+        zIndex: 5,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ fontWeight: 700 }}>Code</div>
 
-            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: panelSmall, userSelect: "none" }}>
-              <input
-                type="checkbox"
-                checked={followCurrentCode}
-                onChange={(e) => setFollowCurrentCode(e.target.checked)}
-              />
-              follow current
-            </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: panelSmall, userSelect: "none" }}>
+          <input
+            type="checkbox"
+            checked={followCurrentCode}
+            onChange={(e) => setFollowCurrentCode(e.target.checked)}
+          />
+          follow current
+        </label>
 
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: panelSmall, opacity: 0.85 }}>function</span>
-              <select
-                value={activeCodeFunc}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setActiveCodeFunc(v);
-                }}
-                style={{ fontFamily: "monospace", fontSize: panelSmall, padding: "4px 8px" }}
-              >
-                {funcIndex.funcs.map((x) => (
-                  <option key={x} value={x}>
-                    {x}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => jumpToBb(currentBb)}
-              disabled={!currentBb}
-              style={{ fontSize: panelSmall, padding: "6px 10px", borderRadius: 8 }}
-            >
-              Jump current
-            </button>
-
-            <button
-              type="button"
-              onClick={() => jumpToBb(selBb)}
-              disabled={!selBb}
-              style={{ fontSize: panelSmall, padding: "6px 10px", borderRadius: 8 }}
-            >
-              Jump selected
-            </button>
-
-            <div style={{ fontSize: panelSmall, opacity: 0.75 }}>
-              current={currentBb || "(none)"} selected={selBb || "(none)"}
-            </div>
-          </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: panelSmall, opacity: 0.85 }}>function</span>
+          <select
+            value={activeCodeFunc}
+            onChange={(e) => {
+              const v = e.target.value;
+              setActiveCodeFunc(v);
+            }}
+            style={{ fontFamily: "monospace", fontSize: panelSmall, padding: "4px 8px" }}
+          >
+            {funcIndex.funcs.map((x) => (
+              <option key={x} value={x}>
+                {x}
+              </option>
+            ))}
+          </select>
         </div>
 
-        {bbs.length === 0 ? (
-          <div style={{ opacity: 0.75 }}>(no blocks for this function)</div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            {bbs.map((n) => {
-              const bb = n.id;
-              const instrs = Array.isArray(n.instrs) ? n.instrs : [];
-              const isCur = bb === currentBb && currentBb !== "";
-              const isSel = bb === selBb && selBb !== "";
-              const isBp = !!bpMap[bb];
+        <button
+          type="button"
+          onClick={() => jumpToBb(currentBb)}
+          disabled={!currentBb}
+          style={{ fontSize: panelSmall, padding: "6px 10px", borderRadius: 8 }}
+        >
+          Jump current
+        </button>
 
-              const headerBg = isCur ? "rgba(239,68,68,0.10)" : isSel ? "rgba(37,99,235,0.08)" : "rgba(0,0,0,0.02)";
-              const headerBorder = isCur ? "2px solid #ef4444" : isSel ? "2px solid #2563eb" : "1px solid #e5e7eb";
+        <button
+          type="button"
+          onClick={() => jumpToBb(selBb)}
+          disabled={!selBb}
+          style={{ fontSize: panelSmall, padding: "6px 10px", borderRadius: 8 }}
+        >
+          Jump selected
+        </button>
 
-              return (
+        <div style={{ fontSize: panelSmall, opacity: 0.75 }}>
+          current={currentBb || "(none)"} selected={selBb || "(none)"}
+        </div>
+      </div>
+    </div>
+
+    <div
+      style={{
+        flex: 1,
+        minHeight: 0,
+        overflowY: "auto",
+        paddingTop: 0,
+        paddingBottom: 8,
+      }}
+    >
+      {bbs.length === 0 ? (
+        <div style={{ opacity: 0.75 }}>(no blocks for this function)</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {bbs.map((n) => {
+            const bb = n.id;
+            const instrs = Array.isArray(n.instrs) ? n.instrs : [];
+            const isCur = bb === currentBb && currentBb !== "";
+            const isSel = bb === selBb && selBb !== "";
+            const isBp = !!bpMap[bb];
+
+            const headerBg = isCur ? "rgba(239,68,68,0.10)" : isSel ? "rgba(37,99,235,0.08)" : "rgba(0,0,0,0.02)";
+            const headerBorder = isCur ? "2px solid #ef4444" : isSel ? "2px solid #2563eb" : "1px solid #e5e7eb";
+
+            return (
+              <div
+                key={bb}
+                ref={(el) => {
+                  codeBbRefs.current[bb] = el;
+                }}
+                style={{
+                  border: headerBorder,
+                  borderRadius: 10,
+                  padding: 12,
+                }}
+                onClick={() => {
+                  setSelBb(bb);
+                  const serial = (msgSerialRef.current += 1);
+                  latestMsgSerialRef.current = serial;
+                  const connId = wsConnIdRef.current;
+                  (async () => {
+                    const contexts = ctxMap[bb] ?? (await fetchStatesForBb(bb, serial, connId));
+                    if (!contexts) return;
+                    const preferred = bb === currentBb ? currentCtxt : contexts[0]?.ctxt ?? "";
+                    selectBestContext(bb, contexts, preferred);
+                  })().catch(() => {});
+                }}
+              >
                 <div
-                  key={bb}
-                  ref={(el) => {
-                    codeBbRefs.current[bb] = el;
-                  }}
                   style={{
-                    border: headerBorder,
-                    borderRadius: 10,
-                    padding: 12,
-                  }}
-                  onClick={() => {
-                    setSelBb(bb);
-                    if (mainTab !== "cfg") {
-                      const serial = (msgSerialRef.current += 1);
-                      latestMsgSerialRef.current = serial;
-                      const connId = wsConnIdRef.current;
-                      (async () => {
-                        const contexts = ctxMap[bb] ?? (await fetchStatesForBb(bb, serial, connId));
-                        if (!contexts) return;
-                        const preferred = bb === currentBb ? currentCtxt : contexts[0]?.ctxt ?? "";
-                        selectBestContext(bb, contexts, preferred);
-                      })().catch(() => {});
-                    }
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 10,
+                    padding: "8px 10px",
+                    borderRadius: 8,
+                    background: headerBg,
+                    marginBottom: 10,
                   }}
                 >
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      gap: 10,
-                      padding: "8px 10px",
-                      borderRadius: 8,
-                      background: headerBg,
-                      marginBottom: 10,
-                    }}
-                  >
-                    <div style={{ fontWeight: 800, wordBreak: "break-all" }}>{bb}</div>
+                  <div style={{ fontWeight: 800, wordBreak: "break-all" }}>{bb}</div>
 
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <div style={{ fontSize: panelSmall, opacity: 0.8 }}>
-                        {isCur ? "current" : isSel ? "selected" : ""}
-                      </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ fontSize: panelSmall, opacity: 0.8 }}>{isCur ? "current" : isSel ? "selected" : ""}</div>
 
-                      <label
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 8,
-                          fontSize: panelSmall,
-                          userSelect: "none",
-                          whiteSpace: "nowrap",
+                    <label
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        fontSize: panelSmall,
+                        userSelect: "none",
+                        whiteSpace: "nowrap",
+                      }}
+                      onClick={(ev) => ev.stopPropagation()}
+                      title="Breakpoint"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isBp}
+                        onChange={(ev) => {
+                          ev.stopPropagation();
+                          setBreakpoint(bb, ev.target.checked);
                         }}
                         onClick={(ev) => ev.stopPropagation()}
-                        title="Breakpoint"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={isBp}
-                          onChange={(ev) => {
-                            ev.stopPropagation();
-                            setBreakpoint(bb, ev.target.checked);
-                          }}
-                          onClick={(ev) => ev.stopPropagation()}
-                        />
-                        bp
-                      </label>
+                      />
+                      bp
+                    </label>
 
-                      <button
-                        type="button"
-                        onClick={(ev) => {
-                          ev.stopPropagation();
-                          setMainTab("cfg");
-                          requestAnimationFrame(() => {
-                            focusNodeById(bb);
-                          });
-                        }}
-                        style={{ fontSize: panelSmall, padding: "6px 10px", borderRadius: 8 }}
-                      >
-                        View CFG
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        setMainTab("cfg");
+                        requestAnimationFrame(() => {
+                          focusNodeById(bb);
+                        });
+                      }}
+                      style={{ fontSize: panelSmall, padding: "6px 10px", borderRadius: 8 }}
+                    >
+                      View CFG
+                    </button>
                   </div>
-
-                  <pre
-                    style={{
-                      margin: 0,
-                      fontSize: 13,
-                      lineHeight: "16px",
-                      whiteSpace: "pre",
-                      overflowX: "auto",
-                      background: "#ffffff",
-                    }}
-                  >
-                    {instrs.length > 0 ? instrs.join("\n") : "(no instruction data yet)"}
-                  </pre>
                 </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    );
+
+                <pre
+                  style={{
+                    margin: 0,
+                    fontSize: 13,
+                    lineHeight: "16px",
+                    whiteSpace: "pre",
+                    overflowX: "auto",
+                    background: "#ffffff",
+                  }}
+                >
+                  {instrs.length > 0 ? instrs.join("\n") : "(no instruction data yet)"}
+                </pre>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  </div>
+);
+
+  };
+
+  const startPanelResizeHandleStyle: React.CSSProperties = {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    width: 12,
+    cursor: "col-resize",
+    zIndex: 10000,
   };
 
   return (
@@ -1505,7 +1544,7 @@ export default function ICFGViewer() {
         style={{
           position: "fixed",
           top: 8,
-          left: 8,
+          left: LEFT_PANEL_LEFT,
           zIndex: 9999,
           background: "#fff",
           padding: Math.round(10 * UI_SCALE),
@@ -1513,9 +1552,19 @@ export default function ICFGViewer() {
           borderRadius: 10,
           fontFamily: "monospace",
           fontSize: panelFont,
-          width: Math.round(430 * UI_SCALE),
+          width: leftPanelW,
+          boxSizing: "border-box",
         }}
       >
+        <div
+          onMouseDown={startResizeLeftPanel}
+          title="Resize"
+          style={{
+            ...startPanelResizeHandleStyle,
+            right: -6,
+          }}
+        />
+
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
           <button
             type="button"
@@ -1682,7 +1731,9 @@ export default function ICFGViewer() {
           </div>
 
           {activeMatchId && (
-            <div style={{ marginTop: 8, fontSize: panelSmall, opacity: 0.85, wordBreak: "break-all" }}>Active: {activeMatchId}</div>
+            <div style={{ marginTop: 8, fontSize: panelSmall, opacity: 0.85, wordBreak: "break-all" }}>
+              Active: {activeMatchId}
+            </div>
           )}
         </div>
       </div>
@@ -1691,7 +1742,7 @@ export default function ICFGViewer() {
         style={{
           position: "fixed",
           top: 8,
-          right: 8,
+          right: RIGHT_PANEL_RIGHT,
           zIndex: 9999,
           background: "#fff",
           padding: Math.round(10 * UI_SCALE),
@@ -1709,13 +1760,8 @@ export default function ICFGViewer() {
           onMouseDown={startResizeRightPanel}
           title="Resize"
           style={{
-            position: "absolute",
+            ...startPanelResizeHandleStyle,
             left: -6,
-            top: 0,
-            bottom: 0,
-            width: 12,
-            cursor: "col-resize",
-            zIndex: 10000,
           }}
         />
 
