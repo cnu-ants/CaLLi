@@ -75,6 +75,10 @@ const UI_RIGHT_PANEL_W_KEY = "calli_ui_right_panel_w_v1";
 const UI_ENV_COLLAPSED_KEY = "calli_ui_env_collapsed_v1";
 const UI_STATE_COLLAPSED_KEY = "calli_ui_state_collapsed_v1";
 
+const UI_MAIN_TAB_KEY = "calli_ui_main_tab_v1";
+const UI_CODE_ACTIVE_FUNC_KEY = "calli_ui_code_active_func_v1";
+const UI_CODE_FOLLOW_CURRENT_KEY = "calli_ui_code_follow_current_v1";
+
 const INSTR_BOX_H = Math.round(300 * NODE_SCALE);
 const NODE_HEADER_H = Math.round(54 * NODE_SCALE);
 const NODE_CTX_H = Math.round(64 * NODE_SCALE);
@@ -139,6 +143,21 @@ function loadNum(key: string, def: number): number {
 function saveNum(key: string, v: number) {
   try {
     localStorage.setItem(key, String(v));
+  } catch {}
+}
+
+function loadStr(key: string, def: string): string {
+  try {
+    const s = localStorage.getItem(key);
+    return s === null ? def : s;
+  } catch {
+    return def;
+  }
+}
+
+function saveStr(key: string, v: string) {
+  try {
+    localStorage.setItem(key, v);
   } catch {}
 }
 
@@ -216,9 +235,21 @@ function entriesToMap(entries: { addr: string; value: string }[]): Record<string
   return m;
 }
 
+function bbToFunc(bb: string): string {
+  const i = bb.indexOf("#");
+  return i >= 0 ? bb.slice(0, i) : bb;
+}
+
+type MainTab = "cfg" | "code";
+
 export default function ICFGViewer() {
   const [graph, setGraph] = useState<GraphJSON | null>(null);
   const [err, setErr] = useState<string | null>(null);
+
+  const [mainTab, setMainTab] = useState<MainTab>(() => {
+    const v = loadStr(UI_MAIN_TAB_KEY, "cfg");
+    return v === "code" ? "code" : "cfg";
+  });
 
   const [rfInstance, setRfInstance] = useState<ReactFlowInstance | null>(null);
 
@@ -284,6 +315,23 @@ export default function ICFGViewer() {
   const cmdQueueRef = useRef<Array<"play" | "step">>([]);
   const inFlightRef = useRef<null | "play" | "step" | "restart">(null);
 
+  const [activeCodeFunc, setActiveCodeFunc] = useState<string>(() => loadStr(UI_CODE_ACTIVE_FUNC_KEY, ""));
+  const [followCurrentCode, setFollowCurrentCode] = useState<boolean>(() => loadBool(UI_CODE_FOLLOW_CURRENT_KEY, true));
+  const codeBbRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const pendingJumpRef = useRef<{ bb: string } | null>(null);
+
+  useEffect(() => {
+    saveStr(UI_MAIN_TAB_KEY, mainTab);
+  }, [mainTab]);
+
+  useEffect(() => {
+    saveStr(UI_CODE_ACTIVE_FUNC_KEY, activeCodeFunc);
+  }, [activeCodeFunc]);
+
+  useEffect(() => {
+    saveBool(UI_CODE_FOLLOW_CURRENT_KEY, followCurrentCode);
+  }, [followCurrentCode]);
+
   useEffect(() => {
     fetch("/icfg")
       .then((r) => {
@@ -341,40 +389,39 @@ export default function ICFGViewer() {
   }, []);
 
   const updateDeltaForVisited = useCallback((bb: string, ctxt: string, contexts: StateResp["contexts"]) => {
-  const hit = contexts.find((c) => c.ctxt === ctxt);
-  if (!hit) return;
+    const hit = contexts.find((c) => c.ctxt === ctxt);
+    if (!hit) return;
 
-  const key = mkKey(bb, ctxt);
-  const newMap = entriesToMap(hit.entries || []);
+    const key = mkKey(bb, ctxt);
+    const newMap = entriesToMap(hit.entries || []);
 
-  const hasPrev = Object.prototype.hasOwnProperty.call(prevStateRef.current, key);
+    const hasPrev = Object.prototype.hasOwnProperty.call(prevStateRef.current, key);
 
-  // First time we ever see this (bb, ctxt): treat as baseline, show as normal (black)
-  if (!hasPrev) {
+    if (!hasPrev) {
+      prevStateRef.current[key] = newMap;
+      setChangedAddrsByKey((prev) => ({
+        ...prev,
+        [key]: {},
+      }));
+      return;
+    }
+
+    const oldMap = prevStateRef.current[key] ?? {};
+    const changed: Record<string, boolean> = {};
+
+    for (const addr of Object.keys(newMap)) {
+      const nv = newMap[addr];
+      const ov = oldMap[addr];
+      if (ov !== nv) changed[addr] = true;
+    }
+
     prevStateRef.current[key] = newMap;
+
     setChangedAddrsByKey((prev) => ({
       ...prev,
-      [key]: {}, // no highlights on first snapshot
+      [key]: changed,
     }));
-    return;
-  }
-
-  const oldMap = prevStateRef.current[key] ?? {};
-  const changed: Record<string, boolean> = {};
-
-  for (const addr of Object.keys(newMap)) {
-    const nv = newMap[addr];
-    const ov = oldMap[addr];
-    if (ov !== nv) changed[addr] = true;
-  }
-
-  prevStateRef.current[key] = newMap;
-
-  setChangedAddrsByKey((prev) => ({
-    ...prev,
-    [key]: changed,
-  }));
-}, []);
+  }, []);
 
   const selectBestContext = useCallback((bb: string, contexts: StateResp["contexts"], preferredCtxt: string) => {
     setSelBb(bb);
@@ -506,7 +553,6 @@ export default function ICFGViewer() {
         setRestartEpoch(restartEpochRef.current);
 
         resetUiForRestart();
-
         setRestartProbe("(pending restart ack...)");
 
         sendWs(connId, { cmd: "restart" });
@@ -859,13 +905,28 @@ export default function ICFGViewer() {
           rawLabel: labelText,
           label: (
             <div style={{ fontFamily: "monospace", textAlign: "left" }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 10 }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 10,
+                  marginBottom: 10,
+                }}
+              >
                 <div style={{ fontSize: NODE_TITLE_FS, fontWeight: 700, wordBreak: "break-all", textAlign: "left", flex: 1 }}>
                   {labelText}
                 </div>
 
                 <label
-                  style={{ display: "flex", alignItems: "center", gap: 8, fontSize: NODE_BODY_FS, userSelect: "none", whiteSpace: "nowrap" }}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    fontSize: NODE_BODY_FS,
+                    userSelect: "none",
+                    whiteSpace: "nowrap",
+                  }}
                   onClick={(ev) => ev.stopPropagation()}
                   title="Breakpoint"
                 >
@@ -1009,13 +1070,15 @@ export default function ICFGViewer() {
 
   useEffect(() => {
     if (!rfInstance || !currentBb) return;
+    if (mainTab !== "cfg") return;
     centerNodeBetweenPanels(currentBb, rf.nodes);
-  }, [rfInstance, currentBb, rf.nodes, centerNodeBetweenPanels]);
+  }, [rfInstance, currentBb, rf.nodes, centerNodeBetweenPanels, mainTab]);
 
   useEffect(() => {
     if (!rfInstance || !selBb) return;
+    if (mainTab !== "cfg") return;
     centerNodeBetweenPanels(selBb, rf.nodes);
-  }, [rfInstance, selBb, rf.nodes, centerNodeBetweenPanels]);
+  }, [rfInstance, selBb, rf.nodes, centerNodeBetweenPanels, mainTab]);
 
   const panelFont = Math.round(13 * UI_SCALE);
   const panelSmall = Math.round(12 * UI_SCALE);
@@ -1124,6 +1187,95 @@ export default function ICFGViewer() {
     };
   }, [rightPanelW, LEFT_PANEL_W]);
 
+  const changedKey = selBb && selCtxt ? mkKey(selBb, selCtxt) : "";
+  const changedSet = changedKey ? (changedAddrsByKey[changedKey] ?? {}) : {};
+
+  const disableControls = wsStatus !== "connected" || pendingRestartRef.current;
+
+  const funcIndex = useMemo(() => {
+    if (!graph) return { funcs: [] as string[], byFunc: {} as Record<string, NodeJSON[]> };
+    const byFunc: Record<string, NodeJSON[]> = {};
+    for (const n of graph.nodes || []) {
+      const fn = bbToFunc(n.id);
+      if (!byFunc[fn]) byFunc[fn] = [];
+      byFunc[fn].push(n);
+    }
+    const funcs = Object.keys(byFunc).sort((a, b) => a.localeCompare(b));
+    return { funcs, byFunc };
+  }, [graph]);
+
+  const funcOrderPos = useMemo(() => {
+    const pos = layoutInfo?.pos ?? {};
+    const getYX = (bb: string) => {
+      const p = pos[bb];
+      if (!p) return { y: 0, x: 0 };
+      return { y: p.y, x: p.x };
+    };
+    return { getYX };
+  }, [layoutInfo]);
+
+  useEffect(() => {
+    if (activeCodeFunc) return;
+    if (funcIndex.funcs.length === 0) return;
+    if (currentBb) {
+      setActiveCodeFunc(bbToFunc(currentBb));
+      return;
+    }
+    setActiveCodeFunc(funcIndex.funcs[0]);
+  }, [activeCodeFunc, funcIndex.funcs, currentBb]);
+
+  const scrollToBbInCode = useCallback((bb: string) => {
+    const el = codeBbRefs.current[bb];
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, []);
+
+  const jumpToBb = useCallback(
+    (bb: string) => {
+      if (!bb) return;
+
+      const fn = bbToFunc(bb);
+      pendingJumpRef.current = { bb };
+
+      setMainTab("code");
+      setActiveCodeFunc(fn);
+    },
+    [setMainTab, setActiveCodeFunc]
+  );
+
+  useEffect(() => {
+    if (!followCurrentCode) return;
+    if (!currentBb) return;
+
+    const fn = bbToFunc(currentBb);
+    setActiveCodeFunc(fn);
+    pendingJumpRef.current = { bb: currentBb };
+  }, [followCurrentCode, currentBb]);
+
+  useEffect(() => {
+    const p = pendingJumpRef.current;
+    if (!p) return;
+    if (mainTab !== "code") return;
+
+    const fn = bbToFunc(p.bb);
+    if (activeCodeFunc !== fn) return;
+
+    pendingJumpRef.current = null;
+    requestAnimationFrame(() => {
+      scrollToBbInCode(p.bb);
+    });
+  }, [mainTab, activeCodeFunc, scrollToBbInCode]);
+
+  useEffect(() => {
+    if (mainTab !== "code") return;
+
+    if (pendingJumpRef.current) return;
+
+    if (followCurrentCode && currentBb) {
+      pendingJumpRef.current = { bb: currentBb };
+      return;
+    }
+  }, [mainTab, followCurrentCode, currentBb]);
+
   if (!graph && !err) return <div style={{ padding: 16, fontFamily: "monospace" }}>Loading /icfg...</div>;
   if (err)
     return (
@@ -1133,13 +1285,222 @@ export default function ICFGViewer() {
       </div>
     );
 
-  const changedKey = selBb && selCtxt ? mkKey(selBb, selCtxt) : "";
-  const changedSet = changedKey ? (changedAddrsByKey[changedKey] ?? {}) : {};
+  const renderCodeView = () => {
+    const fn = activeCodeFunc;
+    const bbs = (funcIndex.byFunc[fn] ?? []).slice();
 
-  const disableControls = wsStatus !== "connected" || pendingRestartRef.current;
+    bbs.sort((a, b) => {
+      const pa = funcOrderPos.getYX(a.id);
+      const pb = funcOrderPos.getYX(b.id);
+      if (pa.y !== pb.y) return pa.y - pb.y;
+      return pa.x - pb.x;
+    });
+
+    const padL = Math.round(LEFT_PANEL_W + 24);
+    const padR = Math.round(rightPanelW + 24);
+
+    return (
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          overflowY: "auto",
+          paddingLeft: padL,
+          paddingRight: padR,
+          paddingTop: 14,
+          paddingBottom: 14,
+          boxSizing: "border-box",
+          fontFamily: "monospace",
+          background: "#ffffff",
+        }}
+      >
+        <div
+          style={{
+            position: "sticky",
+            top: 0,
+            zIndex: 1,
+            background: "#ffffff",
+            borderBottom: "1px solid #e5e7eb",
+            paddingBottom: 10,
+            marginBottom: 12,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ fontWeight: 700 }}>Code</div>
+
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: panelSmall, userSelect: "none" }}>
+              <input
+                type="checkbox"
+                checked={followCurrentCode}
+                onChange={(e) => setFollowCurrentCode(e.target.checked)}
+              />
+              follow current
+            </label>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: panelSmall, opacity: 0.85 }}>function</span>
+              <select
+                value={activeCodeFunc}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setActiveCodeFunc(v);
+                }}
+                style={{ fontFamily: "monospace", fontSize: panelSmall, padding: "4px 8px" }}
+              >
+                {funcIndex.funcs.map((x) => (
+                  <option key={x} value={x}>
+                    {x}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => jumpToBb(currentBb)}
+              disabled={!currentBb}
+              style={{ fontSize: panelSmall, padding: "6px 10px", borderRadius: 8 }}
+            >
+              Jump current
+            </button>
+
+            <button
+              type="button"
+              onClick={() => jumpToBb(selBb)}
+              disabled={!selBb}
+              style={{ fontSize: panelSmall, padding: "6px 10px", borderRadius: 8 }}
+            >
+              Jump selected
+            </button>
+
+            <div style={{ fontSize: panelSmall, opacity: 0.75 }}>
+              current={currentBb || "(none)"} selected={selBb || "(none)"}
+            </div>
+          </div>
+        </div>
+
+        {bbs.length === 0 ? (
+          <div style={{ opacity: 0.75 }}>(no blocks for this function)</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {bbs.map((n) => {
+              const bb = n.id;
+              const instrs = Array.isArray(n.instrs) ? n.instrs : [];
+              const isCur = bb === currentBb && currentBb !== "";
+              const isSel = bb === selBb && selBb !== "";
+              const isBp = !!bpMap[bb];
+
+              const headerBg = isCur ? "rgba(239,68,68,0.10)" : isSel ? "rgba(37,99,235,0.08)" : "rgba(0,0,0,0.02)";
+              const headerBorder = isCur ? "2px solid #ef4444" : isSel ? "2px solid #2563eb" : "1px solid #e5e7eb";
+
+              return (
+                <div
+                  key={bb}
+                  ref={(el) => {
+                    codeBbRefs.current[bb] = el;
+                  }}
+                  style={{
+                    border: headerBorder,
+                    borderRadius: 10,
+                    padding: 12,
+                  }}
+                  onClick={() => {
+                    setSelBb(bb);
+                    if (mainTab !== "cfg") {
+                      const serial = (msgSerialRef.current += 1);
+                      latestMsgSerialRef.current = serial;
+                      const connId = wsConnIdRef.current;
+                      (async () => {
+                        const contexts = ctxMap[bb] ?? (await fetchStatesForBb(bb, serial, connId));
+                        if (!contexts) return;
+                        const preferred = bb === currentBb ? currentCtxt : contexts[0]?.ctxt ?? "";
+                        selectBestContext(bb, contexts, preferred);
+                      })().catch(() => {});
+                    }
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 10,
+                      padding: "8px 10px",
+                      borderRadius: 8,
+                      background: headerBg,
+                      marginBottom: 10,
+                    }}
+                  >
+                    <div style={{ fontWeight: 800, wordBreak: "break-all" }}>{bb}</div>
+
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <div style={{ fontSize: panelSmall, opacity: 0.8 }}>
+                        {isCur ? "current" : isSel ? "selected" : ""}
+                      </div>
+
+                      <label
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          fontSize: panelSmall,
+                          userSelect: "none",
+                          whiteSpace: "nowrap",
+                        }}
+                        onClick={(ev) => ev.stopPropagation()}
+                        title="Breakpoint"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isBp}
+                          onChange={(ev) => {
+                            ev.stopPropagation();
+                            setBreakpoint(bb, ev.target.checked);
+                          }}
+                          onClick={(ev) => ev.stopPropagation()}
+                        />
+                        bp
+                      </label>
+
+                      <button
+                        type="button"
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          setMainTab("cfg");
+                          requestAnimationFrame(() => {
+                            focusNodeById(bb);
+                          });
+                        }}
+                        style={{ fontSize: panelSmall, padding: "6px 10px", borderRadius: 8 }}
+                      >
+                        View CFG
+                      </button>
+                    </div>
+                  </div>
+
+                  <pre
+                    style={{
+                      margin: 0,
+                      fontSize: 13,
+                      lineHeight: "16px",
+                      whiteSpace: "pre",
+                      overflowX: "auto",
+                      background: "#ffffff",
+                    }}
+                  >
+                    {instrs.length > 0 ? instrs.join("\n") : "(no instruction data yet)"}
+                  </pre>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
-    <div style={{ width: "100vw", height: "100vh" }}>
+    <div style={{ width: "100vw", height: "100vh", position: "relative" }}>
       <div
         style={{
           position: "fixed",
@@ -1155,6 +1516,41 @@ export default function ICFGViewer() {
           width: Math.round(430 * UI_SCALE),
         }}
       >
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+          <button
+            type="button"
+            onClick={() => setMainTab("cfg")}
+            style={{
+              fontSize: panelSmall,
+              padding: "6px 10px",
+              borderRadius: 8,
+              border: mainTab === "cfg" ? "2px solid #111827" : "1px solid #d1d5db",
+              background: "#fff",
+              cursor: "pointer",
+            }}
+          >
+            CFG
+          </button>
+          <button
+            type="button"
+            onClick={() => setMainTab("code")}
+            style={{
+              fontSize: panelSmall,
+              padding: "6px 10px",
+              borderRadius: 8,
+              border: mainTab === "code" ? "2px solid #111827" : "1px solid #d1d5db",
+              background: "#fff",
+              cursor: "pointer",
+            }}
+          >
+            CODE
+          </button>
+
+          <span style={{ marginLeft: 8, fontSize: panelSmall, opacity: 0.85 }}>
+            ws#{wsConnId}={wsStatus} epoch={restartEpoch} pendingRestart={String(pendingRestartRef.current)} dropped={droppedWhileRestart}
+          </span>
+        </div>
+
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <button onClick={() => sendCmd("play")} disabled={disableControls} style={{ fontSize: panelFont }}>
             Play
@@ -1165,9 +1561,6 @@ export default function ICFGViewer() {
           <button onClick={() => sendCmd("restart")} disabled={wsStatus !== "connected"} style={{ fontSize: panelFont }}>
             Restart
           </button>
-          <span style={{ marginLeft: 10 }}>
-            ws#{wsConnId}={wsStatus} epoch={restartEpoch} pendingRestart={String(pendingRestartRef.current)} dropped={droppedWhileRestart}
-          </span>
         </div>
 
         <div style={{ marginTop: 10, fontSize: panelSmall, opacity: 0.85, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
@@ -1289,9 +1682,7 @@ export default function ICFGViewer() {
           </div>
 
           {activeMatchId && (
-            <div style={{ marginTop: 8, fontSize: panelSmall, opacity: 0.85, wordBreak: "break-all" }}>
-              Active: {activeMatchId}
-            </div>
+            <div style={{ marginTop: 8, fontSize: panelSmall, opacity: 0.85, wordBreak: "break-all" }}>Active: {activeMatchId}</div>
           )}
         </div>
       </div>
@@ -1520,37 +1911,41 @@ export default function ICFGViewer() {
         </div>
       </div>
 
-      <ReactFlow
-        nodes={nodesForRender}
-        edges={rf.edges}
-        onInit={setRfInstance}
-        onNodeClick={onNodeClick}
-        minZoom={MIN_ZOOM}
-        maxZoom={MAX_ZOOM}
-      >
-        <Background />
-        <Controls />
+      {mainTab === "cfg" ? (
+        <ReactFlow
+          nodes={nodesForRender}
+          edges={rf.edges}
+          onInit={setRfInstance}
+          onNodeClick={onNodeClick}
+          minZoom={MIN_ZOOM}
+          maxZoom={MAX_ZOOM}
+        >
+          <Background />
+          <Controls />
 
-        <MiniMap
-          style={{
-            position: "fixed",
-            left: MINIMAP_LEFT,
-            bottom: MINIMAP_BOTTOM,
-            width: MINIMAP_W,
-            height: MINIMAP_H,
-            background: "#ffffff",
-            border: "1px solid #d1d5db",
-            borderRadius: 10,
-            zIndex: 9998,
-          }}
-          nodeColor={miniNodeColor}
-          nodeStrokeColor="#111827"
-          nodeBorderRadius={6}
-          maskColor="rgba(0,0,0,0.12)"
-          pannable
-          zoomable
-        />
-      </ReactFlow>
+          <MiniMap
+            style={{
+              position: "fixed",
+              left: MINIMAP_LEFT,
+              bottom: MINIMAP_BOTTOM,
+              width: MINIMAP_W,
+              height: MINIMAP_H,
+              background: "#ffffff",
+              border: "1px solid #d1d5db",
+              borderRadius: 10,
+              zIndex: 9998,
+            }}
+            nodeColor={miniNodeColor}
+            nodeStrokeColor="#111827"
+            nodeBorderRadius={6}
+            maskColor="rgba(0,0,0,0.12)"
+            pannable
+            zoomable
+          />
+        </ReactFlow>
+      ) : (
+        renderCodeView()
+      )}
     </div>
   );
 }
