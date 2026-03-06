@@ -2,6 +2,15 @@
 
 This guide shows the basic workflow for building a static analyzer on top of CaLLi.
 
+In CaLLi 0.4v, users typically:
+1. preprocess LLVM bitcode through Init
+2. define abstract value, context, and transfer function
+3. instantiate memory, states, and analyzer modules
+4. seed the initial state
+5. run either:
+    * a normal analyzer (LlvmAnalyzer.Make), or
+    * an interactive web analyzer (LlvmWebAnalyzer.Make + Monitor_web.Make)
+
 ## 1. Initialization
 
 The `Init` module transforms input LLVM bitcode into CaLLi IR.
@@ -226,12 +235,3 @@ dune exec ./example/analyzer.exe -- --web --frontend-dev --calli-home /path/to/C
 * The default web server port is 8080.
 * The web monitor is optional; standard CLI analysis works independently.
 
-## 9. Summary
-In CaLLi 0.4v, users typically:
-1. preprocess LLVM bitcode through Init
-2. define abstract value, context, and transfer function
-3. instantiate memory, states, and analyzer modules
-4. seed the initial state
-5. run either:
-    * a normal analyzer (LlvmAnalyzer.Make), or
-    * an interactive web analyzer (LlvmWebAnalyzer.Make + Monitor_web.Make)
