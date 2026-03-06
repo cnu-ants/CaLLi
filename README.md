@@ -11,9 +11,9 @@ It provides:
 
 ## Requirements
 
-- OCaml 4.13.1 or later
-- Dune
-- LLVM
+- OCaml 5.1.1 or later
+- Dune 3.21.1
+- LLVM 18
 - Node.js and npm (optional, only for the web monitor frontend)
 
 ## Installation
