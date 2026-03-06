@@ -1,160 +1,237 @@
-# Getting Started
+# Getting Started with CaLLi 0.4v
 
-## Initialization
+This guide shows the basic workflow for building a static analyzer on top of CaLLi.
 
-The Init module facilitates the conversion of input LLVM bitcode into Calli 
-Intermediate Representation (IR) recognized by the Calli analyzer. 
-Moreover, Loop Unrolling can be applied to LLVM bitcode through LLVM Pass as input.
-Users have the flexibility to employ various transformation features provided by 
-Calli, such as 'call instruction transformation,' 'prune node insertion,' 'select 
-node insertion,' 'exit node insertion,' and more, according to their specific 
-requirements.
+## 1. Initialization
 
-```
-let _ = 
-  let _ = Init.init () in 
-  let _ = Init.loop_unroll 3 () in
+The `Init` module transforms input LLVM bitcode into CaLLi IR.
+It also provides several optional preprocessing and transformation passes, such as:
+
+- loop unrolling
+- call instruction transformation
+- select node insertion
+- prune node insertion
+- call graph construction
+
+A typical initialization sequence looks like this:
+
+```ocaml
+let () =
+  let _ = Init.init () in
   let _ = Init.transform_call () in
   let _ = Init.transform_select () in
   let _ = Init.transform_prune () in
   let _ = Init.make_llm () in
-  let _ = Init.make_call_graph () in ()
+  let _ = Init.make_call_graph () in
+  ()
 ```
 
-## User Definition
+Depending on your analysis goal, you may enable only the transformations you need.
 
-1) Abstract Value
-
-The abstract value in CaLLi represents the abstraction of values within a program. CaLLi provides infterface for abstract value module.
-
+## 2. User-Defined Components
+To build an analyzer in CaLLi, users define the following core components:
+1. abstract value
+2. analysis context
+3. transfer function
+### 2.1 Abstract Value
+The abstract value represents the abstraction of concrete program values.
+CaLLi provides an interface for abstract domains:
 ```
 module type S =
-  
-  sig
-    type elt
-    type t
+sig
+  type elt
+  type t
 
-    val bot : t
-    val top : t
-    val (<=) : t -> t -> bool
-    val join : t -> t -> t
-    val meet : t -> t -> t
-    val widen : t -> t -> t
+  val bot : t
+  val top : t
+  val (<=) : t -> t -> bool
+  val join : t -> t -> t
+  val meet : t -> t -> t
+  val widen : t -> t -> t
 
-    val alpha : elt -> string -> t
+  val alpha : elt -> string -> t
 
-    val binop : Op.t -> t -> t -> string -> t
-    val compop : Cond.t -> t -> t -> string -> t
+  val binop : Op.t -> t -> t -> string -> t
+  val compop : Cond.t -> t -> t -> string -> t
 
-    val pp : Format.formatter -> t -> unit
-
-  end
-```
-
-The abstract value includes the smallest value 'bot' and biggest value 'top'.
-The binary operation binop and comparison compop functions take an operator and two abstract values, and return an abstract value as the operation result.
-Additionally, functions for calculating partial order(⊑) between values, as well as join, meet and widen functions, need to be implemented.
-
-
-2) Analysis Context
-
-The analysis context module support context-sensitive analysis. 
-
-```
-module type S = sig
-  type t type memty
-  val empty : t
-  val apply : Ast.BasicBlock.t -> Ast.BasicBlock.t list -> t -> memty -> (Ast.
+  val pp : Format.formatter -> t -> unit
 end
 ```
+A user-defined abstract value should implement:
+* lattice operations (bot, top, join, meet, widen)
+* partial order (<=)
+* abstraction (alpha)
+* abstract semantics for binary and comparison operators
 
-The 'apply' functions to create new contexts using the current basicblock, context, 
-and abstract memory which is the analysis result. It then applies the new context 
-to the next basicblocks or selects the next basicblocks based on the new context.
-
-CaLLi provides a callsite context module by default. 
-The following is part of the apply function within the callsite context in Calli.
-
+### 2.2 Analysis Context
+The context module controls context-sensitive analysis.
+CaLLi provides a default call-site-based context module. A typical instantiation looks like this:
 ```
-  ...
-match current_bb.term with
-| CallSite _ ->
-  List.map (fun bb -> (bb, push current_bb.bb_name current_ctxt)) next_bb_list 
-  ...     
+module Ctxt =
+  CallSiteContext.Make
+    (struct
+      type t = string
+      type memty = AbsMemory.t
+      let size = ref 1
+      let llmodule = Init.llmodule ()
+      let call_graph = Init.call_graph ()
+      let pp fmt (s : t) = Format.fprintf fmt "%s" s
+    end)
 ```
+In a call-site context, the current call site is pushed into the context when a function call is encountered. This enables context-sensitive propagation across call edges.
+Users may implement their own context module depending on their analysis needs.
 
-In the callsite context, when encountering a function call in the form of a 
-CallSite command, the apply function generates a new context by pushing the 
-current basic block name onto the current context (call stack). It then applies
- this new context to the successors in the next_bb_list of the current basic 
- block.
-
-Users can implement the apply function according to their analysis goals to create a context module tailored to their specific needs.
-
-
-3) Transfer Function
-
-The transfer function in CaLLi plays a crucial role in the analysis process. It is an implementation of abstract semantics. It takes a basicblock and abstract memory as input and returns a new abstract memory.
-
+### 2.3 Transfer Function
+The transfer function defines the abstract semantics of the analysis. It takes a basic block and an abstract memory, and returns a new abstract memory.
 ```
 module type S = sig
   type memty
   val transfer : Ast.BasicBlock.t -> memty -> memty
 end
 ```
+For example, a transfer function for binary operations may evaluate operands, apply the abstract operator, allocate/update an address, and write the result into abstract memory.
 
-For example, the following code represents the transfer function for BinaryOperation commands. It calculates the values of each operand, performs the operation, and then updates the Env and AbsMemory with the resulting value.
-
+## 3. Building the Analyzer
+After defining the abstract value, context, and transfer function, the next step is to instantiate abstract memory, states, and the analyzer itself.
 ```
-| BinaryOp {name; op; operand0; operand1; _} ->
-  let v1 = abs_eval operand0 mem in
-  let v2 = abs_eval operand1 mem in
-  let res : AbsValue1.t = AbsValue1.binop op v1 v2 name in
-  let addr = stmt.bb_name^(string_of_int stmt.index)^(string_of_int 0) in
-  let _ = Env.env := Env.add name addr !Env.env in
-  AbsMemory.update addr res mem
+module AbsMemory = AbstractMemory.Make (AbsValue)
+module States = States.Make (Ctxt) (AbsMemory)
 ```
-
-
-## Building Analyzer
-
-Utilizing the provided Functor in Calli, it is essential to generate the absmemory 
-and states modules crucial for the creation of the analyzer.
-
+For standard analysis:
 ```
-module MyAbsMemory = AbstractMemory.Make(MyAbsValue)
-module MyStates = States.Make (MyContext) (MyAbsMemory)
-module Analyzer = WtoAnalyzer.Make (MyAbsValue) (MyAbsMemory) (MyContext) (MyStates) (MyTF)
+module Analyzer =
+  LlvmAnalyzer.Make (AbsValue) (AbsMemory) (Ctxt) (States) (TF)
+```
+For web-monitored analysis:
+```
+module Analyzer =
+  LlvmWebAnalyzer.Make (AbsValue) (AbsMemory) (Ctxt) (States) (TF)
 ```
 
-Finally, users can create an analyzer by using the Functor of the CalliAnalyzer module.
-
+## 4. Preparing the Initial State
+Before running the analysis, initialize the memory and set the starting basic block.
+A typical setup looks like this:
 ```
-module Analyzer1 = WlAnalyzer.Make (MyAbsValue) (MyAbsMemory) (MyContext) (MyStates) (MyTF)
-module Analyzer2 = WtoAnalyzer.Make (MyAbsValue) (MyAbsMemory) (MyContext) (MyStates) (MyTF)
+let llm = Init.m () in
+let target_f : Function.t = Module.find target (Init.llmodule ()) in
+let entry = Bbpool.find target_f.entry !Bbpool.pool in
 
+let init_mem = Analyzer.init llm in
+let init_states =
+  States.update (entry, Ctxt.empty ()) init_mem States.empty
 ```
+Here:
+* Analyzer.init initializes the abstract memory
+* entry is the starting basic block
+* States.update seeds the initial abstract state
 
-
-## Performing Analysis
-
-The user can perform analysis using the analyzer created through the Functor. 
-Initially, the analyzer is initialized with the AST transformed into Calli IR.
-Set the starting basicblock for analysis and configure the initial the abstract memory.
-
+## 5. Running the Analysis
+Set the loop bound used by the iteration algorithm:
+Analyzer.LoopCounter.set_max_count 30;
+Then run the analysis.
+For non-web mode:
 ```
-  let init_mem = Analyzer.init (Init.m ())  in 
-  let main = Module.main (Init.llmodule ()) in
-  let entry = Bbpool.find (main.function_name^"#"^"entry") !Bbpool.pool in
-  let init_states = States.update (entry, MyContext.empty ()) init_mem States.empty in
-  
-```
-
-User can set the loop count to be utilized in the iteration algorithm.
-Ultimately, analysis can be performed through the analyze module of the analyzer.
-
-```
-let _ = Analyzer.LoopCounter.set_max_count 5 in
-let _ = Analyzer.analyze init_states in
+let _ = Analyzer.analyze_full entry init_states in
 let res = !Analyzer.summary in
 ```
+For web mode, initialize a runtime object instead:
+```
+let rt = Analyzer.init_runtime ~entry ~init_states
+```
+This runtime is then passed to the web monitor server.
+
+## 6. Example: CLI Analyzer
+A simplified analyzer entry point looks like this:
+```
+let web_enabled = has_flag "--web" in
+
+if web_enabled then (
+  let calli_home = get_calli_home () in
+
+  let module Analyzer =
+    LlvmWebAnalyzer.Make (AbsValue) (AbsMemory) (Ctxt) (States) (TF)
+  in
+  let module Web = Monitor_web.Make (Analyzer) in
+
+  Analyzer.LoopCounter.set_max_count 30;
+
+  let init_mem = Analyzer.init llm in
+  let init_states =
+    States.update (entry, Ctxt.empty ()) init_mem States.empty
+  in
+  let rt = Analyzer.init_runtime ~entry ~init_states in
+
+  let frontend =
+    if has_flag "--no-frontend" then Web.Disabled
+    else if has_flag "--frontend-dev" then Web.Dev
+    else Web.Static
+  in
+
+  Web.start ~frontend ~calli_home ~runtime:rt ~interface ~port ()
+) else (
+  let module Analyzer =
+    LlvmAnalyzer.Make (AbsValue) (AbsMemory) (Ctxt) (States) (TF)
+  in
+
+  Analyzer.LoopCounter.set_max_count 30;
+
+  let init_mem = Analyzer.init llm in
+  let init_states =
+    States.update (entry, Ctxt.empty ()) init_mem States.empty
+  in
+  let _ = Analyzer.analyze_full entry init_states in
+
+  let s = !Analyzer.summary in
+  let _ = Format.printf "ENV \n %a\n" Env.pp !Env.env in
+  let _ = Format.printf "STATES \n %a\n" States.pp s in
+  ()
+)
+```
+
+## 7. Running the Example
+CLI mode
+```
+dune exec ./example/analyzer.exe -- --target <function_name>
+```
+Web mode
+Build the frontend once:
+```
+cd monitor
+npm install
+npm run build
+```
+Then run:
+```
+dune exec ./example/analyzer.exe -- --web --calli-home /path/to/CaLLi --target <function_name>
+```
+Or with an environment variable:
+```
+export CALLI_HOME=/path/to/CaLLi
+dune exec ./example/analyzer.exe -- --web --target <function_name>
+```
+Open the monitor in your browser:
+http://localhost:8080
+Web mode without frontend
+```
+dune exec ./example/analyzer.exe -- --web --no-frontend --calli-home /path/to/CaLLi --target <function_name>
+```
+Web mode with frontend development server
+```
+dune exec ./example/analyzer.exe -- --web --frontend-dev --calli-home /path/to/CaLLi --target <function_name>
+```
+
+## 8. Notes
+* --calli-home specifies the root directory of the CaLLi repository.
+* If --calli-home is omitted, CaLLi uses the CALLI_HOME environment variable.
+* The default web server port is 8080.
+* The web monitor is optional; standard CLI analysis works independently.
+
+## 9. Summary
+In CaLLi 0.4v, users typically:
+1. preprocess LLVM bitcode through Init
+2. define abstract value, context, and transfer function
+3. instantiate memory, states, and analyzer modules
+4. seed the initial state
+5. run either:
+    * a normal analyzer (LlvmAnalyzer.Make), or
+    * an interactive web analyzer (LlvmWebAnalyzer.Make + Monitor_web.Make)
