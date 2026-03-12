@@ -31,7 +31,8 @@ let add_prune_node (f : Function.t) =
           let cfg' = Cfg.add false_prune_bb.bb_name [false_bb.bb_name] cfg' in
           cfg'
         | _ -> cfg) 
-      | Some Switch {cond; succ; default_succ; _;} ->
+      | Some ( Switch {cond; succ; default_succ; _;} as term)->
+        let _ = Format.printf "Add Prune %a @." Term.pp term in
         let cond_name = (match cond with | Name {name; _;} -> name | _ -> failwith "not a label") in
         let v_list, bb_list = List.split succ in
         let stmt_list : Stmt.t list = 

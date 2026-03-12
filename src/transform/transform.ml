@@ -28,6 +28,7 @@ let transform_cond cond : Cond.t =
 
 
 let rec transform_lltype lltype =
+  let _ = Format.printf "transform_lltype@." in 
   let _ = Format.printf "transform_lltype : %s@." (Llvm.string_of_lltype lltype) in
   match Llvm.classify_type lltype with
   | Integer -> 
@@ -60,6 +61,9 @@ let transform_expr_type expr : Type.t =
 
 
 let rec transform_e e func_name : Expr.t = 
+  let _ = Format.printf "transform_e 0@." in
+  let _ = Format.printf "no external@." in
+  let _ = Format.printf "transform_e 1@." in
   let _ = Format.printf "transform_e %s@." (Llvm.string_of_llvalue e) in
   let lltype = Llvm.type_of e in
   let ty = transform_lltype lltype in
@@ -132,7 +136,7 @@ let rec transform_e e func_name : Expr.t =
     | Llvm.ValueKind.ConstantExpr -> Expr.Undef
     (* failwith (Format.asprintf "constexpr %s"(Llvm.string_of_llvalue e)) *)
     | _ -> Expr.Name {ty=ty; name=func_name^(get_name e)}
-
+    
 
 
 let transform_binop op = 
@@ -436,13 +440,16 @@ let transform_module llm : Module.t =
   let _ = Format.printf "transform_module@." in
   let glist = 
     Llvm.fold_left_globals
-    (fun glist v -> 
-          let var : Global.t = 
-
-        {name=get_name v; ty=transform_expr_type v; value=transform_e (Llvm.operand v 0) ""} in
-      glist@[var])
-    []
-    llm
+    (fun glist v ->
+      let var : Global.t = 
+        if Llvm.num_operands v = 0 then 
+          {name=get_name v; ty=transform_expr_type v; value=Expr.Undef} 
+        else if Llvm.is_externally_initialized (Llvm.operand v 0) then
+          {name=get_name v; ty=transform_expr_type v; value=Expr.Undef} 
+        else 
+          {name=get_name v; ty=transform_expr_type v; value=transform_e (Llvm.operand v 0) ""} in
+        glist@[var]
+    ) [] llm
   in
   let function_map = 
     Llvm.fold_left_functions
