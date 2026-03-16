@@ -77,7 +77,7 @@ struct
     else
       let bb, ctxt = Worklist.next r.wl in
       let wl' = Worklist.pop r.wl in
-      let wl'', states'', out_mem = analyze_one r.entry bb ctxt wl' r.states in
+      let wl'', states'', out_mem = analyze_one bb ctxt wl' r.states in
       update_mem_view r bb ctxt out_mem;
       r.wl <- wl'';
       r.states <- states'';
