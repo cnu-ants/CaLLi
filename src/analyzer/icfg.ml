@@ -20,7 +20,6 @@ struct
       icfg
 
   let make (m : Function.t Module.M.t) : t =
-    let _ = Format.printf "Make@." in
     let icfg =
       Module.fold
         (fun _ (func : Function.t) icfg ->
@@ -54,8 +53,6 @@ struct
           | _ -> icfg)
         icfg icfg
     in
-    let _ = Format.printf "ICFG : %a" pp icfg in
-    let _ = Format.printf "ICFG END@." in
     icfg
 
   let preds_intra (bb : Basicblock.t) _ m : Basicblock.t list =
@@ -122,64 +119,7 @@ struct
   let cond_s (c : Cond.t) : string = Format.asprintf "%a" Cond.pp c
 
   let inst_to_string (i : Inst.t) : string =
-    match i with
-    | Inst.BinaryOp { name; op; operand0; operand1; _ } ->
-        Printf.sprintf
-          "%s = %s %s %s"
-          name
-          (op_s op)
-          (expr_s operand0)
-          (expr_s operand1)
-    | Inst.Alloc { name; ty } ->
-        Printf.sprintf "%s = alloc %s" name (ty_s ty)
-    | Inst.Store { operand; name; ty } ->
-        Printf.sprintf "store %s %s %s" (expr_s operand) (ty_s ty) name
-    | Inst.Load { name; operand; _ } ->
-        Printf.sprintf "%s = load %s" name (expr_s operand)
-    | Inst.PtrToInt { name; operand; ty } ->
-        Printf.sprintf "%s = ptrtoint %s to %s" name (expr_s operand) (ty_s ty)
-    | Inst.IntToPtr { name; operand; ty } ->
-        Printf.sprintf "%s = inttoptr %s to %s" name (expr_s operand) (ty_s ty)
-    | Inst.ICmp { name; cond; operand0; operand1; _ } ->
-        Printf.sprintf
-          "%s = icmp %s %s %s"
-          name
-          (cond_s cond)
-          (expr_s operand0)
-          (expr_s operand1)
-    | Inst.Select { name; cond; operand0; operand1; _ } ->
-        Printf.sprintf
-          "%s = select %s %s %s"
-          name
-          (expr_s cond)
-          (expr_s operand0)
-          (expr_s operand1)
-    | Inst.ReturnSite { name; ty } ->
-        Printf.sprintf "%s = %s(call return)" name (ty_s ty)
-    | Inst.Call { name; _ } ->
-        Printf.sprintf "call %s" name
-    | Inst.GetElementPtr { name; ty; operand; index } ->
-        let idxs = index |> List.map expr_s |> String.concat ", " in
-        Printf.sprintf
-          "%s = getelementptr %s %s, %s"
-          name
-          (ty_s ty)
-          (expr_s operand)
-          idxs
-    | Inst.BitCast { name; operand; ty } ->
-        Printf.sprintf "%s = bitcast %s to %s" name (expr_s operand) (ty_s ty)
-    | Inst.Sext { name; operand; ty } ->
-        Printf.sprintf "%s = sext %s to %s" name (expr_s operand) (ty_s ty)
-    | Inst.Zext { name; operand; ty } ->
-        Printf.sprintf "%s = zext %s to %s" name (expr_s operand) (ty_s ty)
-    | Inst.Trunc { name; operand; ty } ->
-        Printf.sprintf "%s = trunc %s to %s" name (expr_s operand) (ty_s ty)
-    | Inst.Prune { cond; value } ->
-        Printf.sprintf "prune %s %s" cond (expr_s value)
-    | Inst.NPrune { cond; value } ->
-        let vs = value |> List.map expr_s |> String.concat ", " in
-        Printf.sprintf "!prune %s %s" cond vs
-    | Inst.Other -> "Other"
+    Format.asprintf "%a" Inst.pp i
 
   let term_to_string (t : Term.t) : string =
     match t with

@@ -66,7 +66,7 @@ let get_fname func =
   try 
   let ret = Str.global_replace (Str.regexp "[\r\n\t ]") "" (List.hd (String.split_on_char ')' (List.hd (List.tl (String.split_on_char '@' (Llvm.string_of_llvalue func)))))) in
   ret ^ (String.make 1 ')')
-  with | _ -> let _ = Format.printf "%s@." (Llvm.string_of_llvalue func)  in "unknown"
+  with | _ -> let _ = Format.printf "unknown %s@." (Llvm.string_of_llvalue func)  in "unknown"
 
 let get_fname_from_bb str =
   try

@@ -3,20 +3,7 @@ open Calli
 
 type memty = AbsMemory.t
 
-let set_constraint  (value:AbsValue.t) (v:AbsValue.t) : AbsValue.t = 
-    match value, v with
-    | AbsInt v', _ -> AbsInt (v')
 
-    (* | AbsInt v', AbsInt v -> AbsInt (v', S (AbsValue.AbsSet.add v s)) *)
-    | _ -> value
-
-let set_constraint_cond (cond:Cond.t)  (value:AbsValue.t) (v:AbsValue.t) : AbsValue.t = 
-    match cond with
-    | Eq -> AbsValue.app_eq value v
-    | Ne -> AbsValue.app_ne value v
-    | Slt -> AbsValue.app_slt value v 
-    | Sge -> AbsValue.app_sge value v
-    | _ -> failwith "set_constraint_cond : not imple"
                     
 let abs_eval (e : Expr.t) (mem: AbsMemory.t) =
     match e with
@@ -28,201 +15,110 @@ let abs_eval (e : Expr.t) (mem: AbsMemory.t) =
     | Void _ -> AbsValue.top
     | _ -> AbsValue.top
 
-let nprune s (v:AbsValue.t) mem (meta : Metadata.t) = 
-    let a = Env.find s !Env.env in
-    let v' =  AbsMemory.find a mem in
-    let pruned_v = AbsValue.sub v' v in 
-    if AbsValue.(pruned_v <= (AbsValue.bot)) then 
-        AbsMemory.bot
-    else   
-    if mem = AbsMemory.bot then mem else
-    match meta with
-    | Meta {alias} ->
-    (match Metadata.Alias.find_opt s alias with
-    | Some (Predicate {cond; operand0; operand1}) -> 
-      mem
-    | Some (Pointer e) -> 
-        let s' = match e with
-        | Name {name; _;} -> name 
-        | _ -> failwith "error1" in
-        let a = Env.find s' !Env.env in
-        let a' = AbsMemory.find a mem in
-        (match a' with
-        | AbsAddr a'' ->
-            let mem' = AbsValue.AbsAddr.fold
-            (fun a mem ->  
-                let v' = AbsMemory.find a mem in 
-                let v'' = AbsValue.sub v' v in 
-                if AbsValue.(v'' <= AbsValue.bot) then AbsMemory.bot 
-                 else AbsMemory.update a v'' mem 
-                (* let _ = Pp.printf ~color:Yellow "%a -> %a\n" AbsValue.pp v' AbsValue.pp v'' in
-                AbsMemory.update a v'' mem  *)
-            ) 
-            a'' mem
-            in mem'
-        | _ -> mem (*failwith "Error"*))
-    | _ -> mem
-    )
-    | Empty -> failwith "Nothing to Prune"
+let meet_name (name : string) (v : AbsValue.t) mem =
+  if AbsValue.(v <= bot) then
+    mem
+  else
+    let a = Env.find name !Env.env in
+    let old_v = AbsMemory.find a mem in
+    let new_v = AbsValue.meet old_v v in
+    if AbsValue.(new_v <= bot) then
+      AbsMemory.bot
+    else
+      AbsMemory.update a new_v mem
 
-let rec prune s (v:AbsValue.t) mem (meta : Metadata.t) =
-    let a = Env.find s !Env.env in
-    let v' =  AbsMemory.find a mem in
-    let pruned_v = AbsValue.meet v' v in 
-    if AbsValue.(pruned_v <= (AbsValue.bot)) then 
-        AbsMemory.bot
-    else 
-    if AbsValue.(v <= (AbsValue.bot)) then mem else
-    let t = AbsValue.alpha (IntLiteral (Z.of_int 1)) "" in
-    let f = AbsValue.alpha (IntLiteral (Z.of_int 0)) "" in 
-    match meta with
-    | Meta {alias} ->
-    (match Metadata.Alias.find_opt s alias with
-    | Some (Predicate {cond; operand0; operand1}) -> 
-        (match cond with
-        (* NE *)
-         | Ne when (v = f) -> 
-        (match operand0, operand1 with
-        | Name {name; _}, ConstInt _ -> 
-            prune name (abs_eval operand1 mem) mem meta
-        | ConstInt _, Name {name; _} -> 
-            prune name (abs_eval operand0 mem) mem meta
-        | _ -> (* let _ = Format.printf "prune not implemeted yet" in *) mem
-        )
-        | Ne when (v = t) ->
-        (match operand0, operand1 with
-        | Name {name; _}, ConstInt _ -> 
-            let a = Env.find name !Env.env in
-            let v =  AbsMemory.find a mem in
-            let pruned_v = set_constraint_cond Cond.Ne v (abs_eval operand1 mem) in 
-            if AbsValue.(pruned_v <= (AbsValue.bot)) then 
-              AbsMemory.bot
-            else 
-              let mem = AbsMemory.update a pruned_v mem in
-              prune name pruned_v mem meta
-        | ConstInt _, Name {name; _} -> 
-            let a = Env.find name !Env.env in
-            let v = AbsMemory.find a mem in
-            prune name (set_constraint v (abs_eval operand0 mem)) mem meta
-        | _ -> (* let _ = Format.printf "prune not implemeted yet" in *) mem
-        )
+let swap_cond (c : Cond.t) : Cond.t =
+  match c with
+  | Eq  -> Eq
+  | Ne  -> Ne
+  | Slt -> Sgt
+  | Sle -> Sge
+  | Sgt -> Slt
+  | Sge -> Sle
+  | Ult -> Ugt
+  | Ule -> Uge
+  | Ugt -> Ult
+  | Uge -> Ule
 
-        (* EQ *)
-        | Eq when (v = t) -> 
-        (match operand0, operand1 with
-        | ConstInt _, ConstInt _ ->
-            if AbsValue.((abs_eval operand0 mem) = (abs_eval operand1 mem)) then
+let set_constraint_cond (cond:Cond.t)  (value:AbsValue.t) (v:AbsValue.t) : AbsValue.t = 
+    match cond with
+    | Eq -> AbsValue.app_eq value v
+    | Ne -> AbsValue.app_ne value v
+    | Slt -> AbsValue.app_slt value v 
+    | Sge -> AbsValue.app_sge value v
+    | _ -> v
+
+let prune_value (lhs : string) (rhs : Expr.t) mem =
+  let v = abs_eval rhs mem in
+  meet_name lhs v mem
+
+let prune_predicate (cond : Cond.t) (operand0 : Expr.t) (operand1 : Expr.t) mem =
+  match operand0, operand1 with
+  | Expr.Name { name; _ }, _ ->
+      let a = Env.find name !Env.env in
+      let cur_v = AbsMemory.find a mem in
+      let rhs_v = abs_eval operand1 mem in
+      let pruned_v = set_constraint_cond cond cur_v rhs_v in
+      if AbsValue.(pruned_v <= bot) then
+        AbsMemory.bot
+      else
+        AbsMemory.update a pruned_v mem
+
+  | _, Expr.Name { name; _ } ->
+      let a = Env.find name !Env.env in
+      let cur_v = AbsMemory.find a mem in
+      let lhs_v = abs_eval operand0 mem in
+      let pruned_v = set_constraint_cond (swap_cond cond) cur_v lhs_v in
+      if AbsValue.(pruned_v <= bot) then
+        AbsMemory.bot
+      else
+        AbsMemory.update a pruned_v mem
+
+  | _, _ ->
+      let lhs_v = abs_eval operand0 mem in
+      let rhs_v = abs_eval operand1 mem in
+      let pruned_v = set_constraint_cond cond lhs_v rhs_v in
+      if AbsValue.(pruned_v <= bot) then
+        AbsMemory.bot
+      else
+        mem
+
+let prune_pointer (lhs : string) (operand : Expr.t) mem =
+  let lhs_addr = Env.find lhs !Env.env in
+  let lhs_v = AbsMemory.find lhs_addr mem in
+  match operand with
+  | Expr.Name { name = src; _ } ->
+      let src_addr = Env.find src !Env.env in
+      let src_v = AbsMemory.find src_addr mem in
+      begin
+        match src_v with
+        | AbsAddr addrs ->
+            AbsValue.AbsAddr.fold
+              (fun addr mem_acc ->
+                let pointee_v = AbsMemory.find addr mem_acc in
+                let pruned_v = AbsValue.meet lhs_v pointee_v in
+                if AbsValue.(pruned_v <= bot) then
+                  AbsMemory.bot
+                else
+                  AbsMemory.update addr pruned_v mem_acc)
+              addrs
               mem
-            else AbsMemory.bot
-        | Name {name; _}, ConstInt _ -> 
-            let a = Env.find name !Env.env in
-            let v =  AbsMemory.find a mem in
-            let pruned_v = set_constraint_cond cond v (abs_eval operand1 mem) in 
-            if AbsValue.(pruned_v <= (AbsValue.bot)) then 
-              AbsMemory.bot
-            else 
-              let mem = AbsMemory.update a pruned_v mem in
-              prune name pruned_v mem meta
-        | Name {name=name1; _}, Name {name=name2; _} -> 
-            let a = Env.find name1 !Env.env in
-            let v =  AbsMemory.find a mem in
-            let a = Env.find name1 !Env.env in
-            let v =  AbsMemory.find a mem in
+        | _ ->
             mem
-        | _ -> failwith "prune Eq not imp"
-        )
-        | Eq when (v = f) ->
-        (match operand0, operand1 with
-        | Name {name; _}, ConstInt _ -> 
-            let a = Env.find name !Env.env in
-            let v =  AbsMemory.find a mem in
-            let pruned_v = set_constraint_cond Cond.Ne v (abs_eval operand1 mem) in 
-            if AbsValue.(pruned_v <= (AbsValue.bot)) then 
-              AbsMemory.bot
-            else 
-              let mem = AbsMemory.update a pruned_v mem in
-              prune name pruned_v mem meta
-        | Name {name=name1; _}, Name {name=name2; _} -> 
-            let a = Env.find name1 !Env.env in
-            let v =  AbsMemory.find a mem in
-            let a = Env.find name1 !Env.env in
-            let v =  AbsMemory.find a mem in
-            mem
-        | _ -> (* let _ = Format.printf "prune not implemeted yet" in *) mem
-        )
+      end
+  | _ ->
+      mem
 
-        (* SLT *)
-        | Slt when (v = t)  -> 
-        (match operand0, operand1 with
-        | Name {name; _}, ConstInt _ -> 
-            let a = Env.find name !Env.env in
-            let v =  AbsMemory.find a mem in
-            let pruned_v = set_constraint_cond cond v (abs_eval operand1 mem) in 
-            if AbsValue.(pruned_v <= (AbsValue.bot)) then
-              AbsMemory.bot 
-            else 
-            let mem = AbsMemory.update a pruned_v mem in
-            prune name pruned_v mem meta
-            (*let _ = Format.printf "res : %a\n" AbsValue.pp ((abs_eval operand1 mem)) in
-            let _ = Format.printf "res : %a\n" AbsValue.pp (set_constraint v (abs_eval operand1 mem)) in
-            prune name (set_constraint v (abs_eval operand1 mem)) mem meta *)
-        | ConstInt _, Name {name; _} -> 
-            let a = Env.find name !Env.env in
-            let v = AbsMemory.find a mem in
-            failwith "slt"
-        | _ -> (*let _ = Format.printf "Prune Slt" in *)mem
-        )
-        | Slt when (v = f)  -> 
-        (match operand0, operand1 with
-        | Name {name; _}, ConstInt _ -> 
-            let a = Env.find name !Env.env in
-            let v =  AbsMemory.find a mem in
-            let pruned_v = set_constraint_cond Cond.Sge v (abs_eval operand1 mem) in 
-            if AbsValue.(pruned_v <= (AbsValue.bot)) then
-              AbsMemory.bot else 
-            let mem = AbsMemory.update a pruned_v mem in
-            prune name pruned_v mem meta
-            (*let _ = Format.printf "res : %a\n" AbsValue.pp ((abs_eval operand1 mem)) in
-            let _ = Format.printf "res : %a\n" AbsValue.pp (set_constraint v (abs_eval operand1 mem)) in
-            prune name (set_constraint v (abs_eval operand1 mem)) mem meta *)
-        | ConstInt _, Name {name; _} -> 
-            let a = Env.find name !Env.env in
-            let v = AbsMemory.find a mem in
-            failwith "slt"
-        | _ -> mem
-        )
+let prune (pr : Inst.prune_ty) mem =
+  match pr with
+  | Inst.Value { lhs; rhs } ->
+      prune_value lhs rhs mem
 
-        | _ -> mem
-        )
-    | Some (Pointer e) ->
-        let a = Env.find s !Env.env in
-        let v' =  AbsMemory.find a mem in
-        let pruned_v = AbsValue.meet v v' in 
-        if AbsValue.(pruned_v <= (AbsValue.bot)) then 
-          AbsMemory.bot
-        else 
-          let mem = AbsMemory.update a pruned_v mem in
-        let s' = match e with
-        | Name {name; _;} -> name 
-        | _ -> failwith "error1" in
-        let a = Env.find s' !Env.env in
-        let a' = AbsMemory.find a mem in
-        (match a' with
-        | AbsAddr a'' ->
-            let mem' = AbsValue.AbsAddr.fold
-            (fun a mem ->  
-                let v' = AbsMemory.find a mem in 
-                let v'' = AbsValue.meet v v' in 
-                if AbsValue.(v'' <= (AbsValue.bot)) then
-                     AbsMemory.bot 
-                else  AbsMemory.update a v'' mem 
-            ) 
-            a'' mem
-            in mem'
-        | _ -> mem (*failwith "Error"*))
-    | None -> mem
-    )
-    | Empty -> failwith "Nothing to Prune"
+  | Inst.Predicate { cond; operand0; operand1 } ->
+      prune_predicate cond operand0 operand1 mem
+
+  | Inst.Pointer { lhs; operand } ->
+      prune_pointer lhs operand mem
 
 let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
     let instr = stmt.inst in
@@ -307,29 +203,8 @@ let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
     let _ = Env.env := Env.add name addr !Env.env in
     let mem' = AbsMemory.update addr res mem in
     mem'      
-    | Prune {cond; value} -> 
-    let a = Env.find cond !Env.env in
-    let v = abs_eval value mem in
-    let bb = Bbpool.find stmt.bb_name !Bbpool.pool in
-    let func = Module.find bb.func_name (Init.llmodule ()) in
-    (*let mem' = AbsMemory.update a v mem in
-    *)let mem'' = prune cond v mem func.metadata in
-    mem''
-    | NPrune {cond; value} ->
-    let a = Env.find cond !Env.env in
-    let v = List.fold_left (fun v' v -> AbsValue.join v' (abs_eval v mem)) AbsValue.bot value in
-    let bb = Bbpool.find stmt.bb_name !Bbpool.pool in
-    let func = Module.find bb.func_name (Init.llmodule ()) in
-    let mem'' = nprune cond v mem func.metadata in
-    mem''
-      (*
-      let v_lst = List.map (fun v -> abs_eval v mem) value in
-      let bb = Bbpool.find stmt.bb_name !Bbpool.pool in
-      let func = Module.find bb.func_name (Init.llmodule ()) in
-      let mem' = List.fold_left (fun mem' v -> 
-          nprune cond v mem' func.metadata) mem v_lst in
-      mem'
-      *)
+    | Prune pr ->
+      prune pr mem
     | _ -> mem
 
 
@@ -347,7 +222,9 @@ let abs_interp_term' (term : Term.t) (mem : AbsMemory.t) =
     mem'
     | Exit _ -> mem
     | CallSite {callee; args; bb_name;_} ->
-        let call_func : Function.t = Module.find callee (Init.llmodule ()) in
+        let call_func  = Module.find_opt callee (Init.llmodule ()) in
+        (match call_func with
+        |Some call_func ->
         if (List.length call_func.params) <> (List.length args) then mem else
         let mem', _ =
           List.fold_left
@@ -364,6 +241,7 @@ let abs_interp_term' (term : Term.t) (mem : AbsMemory.t) =
           args
         in
         mem'
+        | None -> mem)
     | Switch _ -> mem
     | _ -> mem
 
@@ -379,7 +257,7 @@ let abs_interp_global (v : Global.t) mem =
 
 
 let transfer (bb : Basicblock.t) (mem : AbsMemory.t)  =
-    let _ = Format.printf "TF1 : %s@." bb.bb_name in 
+    let _ = Format.printf "TF : %s@." bb.bb_name in 
     let mem' = List.fold_left
     (fun mem stmt ->
         let mem'' = abs_interp_stmt stmt mem in
@@ -387,11 +265,9 @@ let transfer (bb : Basicblock.t) (mem : AbsMemory.t)  =
     )
     mem bb.stmts 
     in
-    let _ = Format.printf "TF2 : %s@." bb.bb_name in 
     let mem' = 
       match bb.term with
       | Some term ->  abs_interp_term' term mem' 
       | None -> mem'
     in
-    let _ = Format.printf "TF3 : %s@." bb.bb_name in 
     mem'

@@ -88,11 +88,6 @@ struct
           match States.find_mem_opt (succ, ctxt2) s with
           | Some old_in ->
               if AbsMem.(out_mem <= old_in) then
-                let _ =
-                  Format.printf
-                    "after %s succ %s - FixPoint@."
-                    bb.bb_name succ.bb_name
-                in
                 (w, s)
               else
                 let joined_in = AbsMem.(join old_in out_mem) in

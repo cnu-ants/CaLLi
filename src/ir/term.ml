@@ -15,7 +15,7 @@ let pp_switch_succ fmt succ =
 let pp ppf (term:t) =
   match term with
   | CallSite {callee; args; _} -> 
-    let _ = Format.fprintf ppf "call %s(" callee in
+    let _ = Format.fprintf ppf "callsite %s(" callee in
     let _ =
       List.iter
       (fun arg -> Format.fprintf ppf "%a" Expr.pp arg)
