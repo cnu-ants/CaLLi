@@ -13,10 +13,10 @@ let transform_cfg (cfg : Cfg.t) : Cfg.t =
         let bb_name3 = bb.bb_name^"'" in
         let alloca : Stmt.t = {stmt with inst=(Alloc {name=bb_name^name; ty=(Pointer {ty=ty})})} in
         let br_term : Term.t = CondBr {bb_name=bb_name; cond=cond; 
-                              succ0=(Name {ty=Label; name=bb_name1}); 
-                              succ1=(Name {ty=Label; name=bb_name2});} in
+                              succ0=(BasicBlock {name=bb_name1}); 
+                              succ1=(BasicBlock {name=bb_name2});} in
         let load : Stmt.t = {bb_name=bb_name3; index=(-1); loc=stmt.loc;
-                        inst=(Load {name=name; operand=Name {ty=ty; name=bb_name^name}; ty=ty})} in
+                        inst=(Load {name=name; operand=Var {ty=ty; name=bb_name^name; arg=false}; ty=ty})} in
         let store1 : Stmt.t = {bb_name=bb_name1; index=0; loc=stmt.loc;
                           inst=(Store {operand=operand0; name=bb_name^name; ty=(Pointer {ty=ty})})
                           } in 
@@ -33,10 +33,10 @@ let transform_cfg (cfg : Cfg.t) : Cfg.t =
           } in
         let select_bb1 : Basicblock.t = {bb with bb_name=bb_name1;
                           stmts=[store1];
-                          term=Some(Br {bb_name=bb_name1; succ=(Name {ty=Label; name=bb_name3})})} in
+                          term=Some(Br {bb_name=bb_name1; succ=(BasicBlock {name=bb_name3})})} in
         let select_bb2 : Basicblock.t = {bb with bb_name=bb_name2;
                           stmts=[store2];
-                          term=Some(Br {bb_name=bb_name2; succ=(Name {ty=Label; name=bb_name3})})}  in
+                          term=Some(Br {bb_name=bb_name2; succ=(BasicBlock {name=bb_name3})})}  in
         let _ = Bbpool.pool := Bbpool.add bb_name new_bb1 !Bbpool.pool in 
         let _ = Bbpool.pool := Bbpool.add bb_name1 select_bb1 !Bbpool.pool in 
         let _ = Bbpool.pool := Bbpool.add bb_name2 select_bb2 !Bbpool.pool in 

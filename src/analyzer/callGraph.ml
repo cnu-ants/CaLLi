@@ -32,7 +32,6 @@ let pp fmt (g : t) =
     (M.bindings g)
 
 let next (func_name : string) (g : t) (m : Function.t Module.M.t) : Basicblock.t list =
-  let _ = Format.printf "callGraph next@." in
   (find func_name g).called
   |> List.map (fun (called_func, called_bb) ->
          let f = Module.find called_func m in
@@ -40,18 +39,15 @@ let next (func_name : string) (g : t) (m : Function.t Module.M.t) : Basicblock.t
          Bbpool.find_bb b.bb_name)
 
 let front (func_name : string) (g : t) (_ : Function.t Module.M.t) : string list =
-  let _ = Format.printf "callGraph front@." in
   (find func_name g).called |> List.map (fun (_, called_bb) -> called_bb)
 
 let make_call_graph (m : Module.t) : t =
-  let _ = Format.printf "callGraph make@." in
   let init (m : Module.t) =
     Module.fold
       (fun _ (f : Function.t) (g : t) ->
         add f.function_name { calling = []; called = [] } g)
       m.function_map empty
   in
-  let _ = Format.printf "callGraph make init done@." in
   let call_graph =
     Module.fold
       (fun _ (f : Function.t) (g : t) ->
@@ -87,7 +83,6 @@ let make_call_graph (m : Module.t) : t =
         g')
       m.function_map (init m)
   in
-  let _ = Format.printf "callGraph make done@." in
   call_graph
 
 let build_adj_from_map (m : Function.t Module.M.t) : string list M.t =

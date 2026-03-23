@@ -3,7 +3,7 @@ module NameSet = Set.Make (String)
 
 let calc_name (e : Expr.t) : string option =
   match e with
-  | Expr.Name { name; _ } -> Some name
+  | Expr.Var { name; _ } -> Some name
   | _ -> None
 
 let negate_cond (c : Cond.t) : Cond.t =
@@ -23,6 +23,7 @@ let build_defmap (func : Function.t) : Stmt.t NameMap.t =
   Cfg.fold
     (fun bb_name _ acc ->
       let bb = Bbpool.find bb_name !Bbpool.pool in
+      let _ = Format.printf "build_Defmap@." in
       List.fold_left
         (fun acc (stmt : Stmt.t) ->
           match stmt.inst with
@@ -130,14 +131,17 @@ let add_prune_node_in_function (f : Function.t) : Function.t =
   let cfg =
     Cfg.fold
       (fun bb_name _ cfg ->
+        let _ = Format.printf "add prune %s@." bb_name in
         let bb : Basicblock.t = Bbpool.find_bb bb_name in
+        let _ = Format.printf "add prune %a>@." Basicblock.pp bb in
         match bb.term with
         | Some Term.CondBr { cond; succ0; succ1; _ } ->
             begin
               match cond, succ0, succ1 with
-              | Expr.Name { name = cond_name; _ },
-                Expr.Name { name = name0; _ },
-                Expr.Name { name = name1; _ } ->
+              | Expr.Var { name = cond_name; _ },
+                Expr.BasicBlock { name = name0; _ },
+                Expr.BasicBlock { name = name1; _ } ->
+                  let _ = Format.printf "add prune %s1@." bb_name in
                   let true_bb : Basicblock.t = Bbpool.find name0 !Bbpool.pool in
                   let false_bb : Basicblock.t = Bbpool.find name1 !Bbpool.pool in
 
@@ -183,8 +187,8 @@ let add_prune_node_in_function (f : Function.t) : Function.t =
                              {
                                bb_name;
                                cond;
-                               succ0 = Expr.Name { ty = Label; name = true_prune_bb.bb_name };
-                               succ1 = Expr.Name { ty = Label; name = false_prune_bb.bb_name };
+                               succ0 = Expr.BasicBlock { name = true_prune_bb.bb_name };
+                               succ1 = Expr.BasicBlock { name = false_prune_bb.bb_name };
                              });
                     }
                   in
@@ -211,10 +215,9 @@ let add_prune_node_in_function (f : Function.t) : Function.t =
             end
 
         | Some (Term.Switch { cond; succ; default_succ; _ } as term) ->
-            let _ = Format.printf "Add Prune %a @." Term.pp term in
             begin
               match cond with
-              | Expr.Name { name = cond_name; _ } ->
+              | Expr.Var { name = cond_name; _ } ->
                   let v_list, bb_list = List.split succ in
 
                   let prune_bb_list : Basicblock.t list =
@@ -279,11 +282,11 @@ let add_prune_node_in_function (f : Function.t) : Function.t =
                              {
                                bb_name;
                                cond;
-                               default_succ = Expr.Name { ty = Label; name = default_bb.bb_name };
+                               default_succ = Expr.BasicBlock { name = default_bb.bb_name };
                                succ =
                                  List.map2
                                    (fun v (bb : Basicblock.t) ->
-                                     (v, Expr.Name { ty = Label; name = bb.bb_name }))
+                                     (v, Expr.BasicBlock { name = bb.bb_name }))
                                    v_list
                                    prune_bb_list;
                              });
@@ -306,7 +309,7 @@ let add_prune_node_in_function (f : Function.t) : Function.t =
                           prune_bb.bb_name
                           [
                             match next_bb with
-                            | Expr.Name { name; _ } -> name
+                            | Expr.BasicBlock { name; } -> name
                             | _ -> failwith "not a label"
                           ]
                           cfg)
@@ -325,6 +328,7 @@ let add_prune_node_in_function (f : Function.t) : Function.t =
       f.cfg
       f.cfg
   in
+  let _ = Format.printf "add prune done@." in
   { f with cfg }
 
 let add_prune_node (m : Module.t) : Module.t =

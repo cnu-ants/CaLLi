@@ -28,7 +28,6 @@ let transform_cond cond : Cond.t =
 
 
 let rec transform_lltype lltype =
-  let _ = Format.printf "transform_lltype@." in 
   let _ = Format.printf "transform_lltype : %s@." (Llvm.string_of_lltype lltype) in
   match Llvm.classify_type lltype with
   | Integer -> 
@@ -61,18 +60,45 @@ let transform_expr_type expr : Type.t =
 
 
 let rec transform_e e func_name : Expr.t = 
-  let _ = Format.printf "transform_e 0@." in
-  let _ = Format.printf "no external@." in
-  let _ = Format.printf "transform_e 1@." in
   let _ = Format.printf "transform_e %s@." (Llvm.string_of_llvalue e) in
   let lltype = Llvm.type_of e in
   let ty = transform_lltype lltype in
   if ty = Type.Void then Expr.Void {ty=Type.Void} 
   else
     let str = (Llvm.string_of_llvalue e) in
-    match Llvm.classify_value e with
-    | Llvm.ValueKind.ConstantInt -> Expr.ConstInt {ty=ty; value=get_int str}
-    | Llvm.ValueKind.ConstantFP -> Expr.ConstFP {ty=get_type str; value=get_float str}
+    let valty : Llvm.ValueKind.t = Llvm.classify_value e in
+    match valty with
+    | NullValue -> Expr.Null
+    | Argument -> Expr.Var {ty=ty; name=get_name e; arg=true}
+    | BasicBlock -> Expr.BasicBlock {name=func_name^"#"^get_bbname e}
+    | InlineAsm -> Expr.InlineAsm
+    | MDNode -> Expr.Undef
+    | MDString -> failwith "Unreachable transform_e : MDString"
+    | BlockAddress -> Expr.BlockAddr
+    | ConstantAggregateZero -> Expr.Undef
+    | ConstantArray -> Expr.Undef
+    | ConstantDataArray -> Expr.Undef
+    | ConstantDataVector -> Expr.Undef
+    | ConstantExpr -> Expr.ConstExpr
+    | ConstantFP -> Expr.ConstFP {ty=get_type str; value=get_float str}
+    | ConstantInt -> Expr.ConstInt {ty=ty; value=get_int str}
+    | ConstantPointerNull -> Expr.NullPtr
+    | ConstantStruct -> Expr.Undef
+    | ConstantVector -> Expr.Undef
+    | Function -> Function 
+    | GlobalIFunc -> Expr.Undef
+    | GlobalAlias -> Expr.Undef
+    | GlobalVariable -> Expr.GlobalVar {ty=ty; name=get_name e}
+    | UndefValue -> Expr.Undef
+    | PoisonValue -> Poison 
+    | Instruction _ -> Expr.Var {ty=ty; name=func_name^(get_name e); arg=true}
+
+
+
+
+
+
+(*
     | Llvm.ValueKind.ConstantVector
     | Llvm.ValueKind.ConstantDataVector -> 
       let element_ty = transform_lltype (Llvm.element_type lltype) in
@@ -130,14 +156,7 @@ let rec transform_e e func_name : Expr.t =
       )
       in
       Expr.Array {ty=ty; value=array}
-    (* | Llvm.ValueKind.ConstantStruct ->  *)
-    | Llvm.ValueKind.GlobalVariable -> Expr.Name {ty=ty; name=get_name e}
-    | Llvm.ValueKind.BasicBlock -> Expr.Name {ty=ty; name=func_name^"#"^get_bbname e}
-    | Llvm.ValueKind.ConstantExpr -> Expr.Undef
-    (* failwith (Format.asprintf "constexpr %s"(Llvm.string_of_llvalue e)) *)
-    | _ -> Expr.Name {ty=ty; name=func_name^(get_name e)}
-    
-
+  *)  
 
 let transform_binop op = 
   (* let _ = Format.printf "transform binop\n@." in *)
@@ -170,7 +189,7 @@ let rec transform_args instr func_name num_args : Expr.t list =
 
 
 let transform_instr instr func_name: Inst.t=
-  let _ = Format.printf "transform_instr@." in
+  let _ = Format.printf "transform_instr %s@." (Llvm.string_of_llvalue instr) in
   let op = Llvm.instr_opcode instr in 
   match op with
   (* | Llvm.Opcode.FNeg  *)
@@ -278,7 +297,7 @@ let transform_term term func_name bb_name: Term.t =
   match Llvm.instr_opcode term with
   | Llvm.Opcode.Br -> 
     (match Llvm.is_conditional term with
-    | true -> Term.CondBr 
+    | true -> Term.CondBr
       {bb_name=bb_name;
       cond=(transform_e (Llvm.operand term 0) func_name); 
       succ0=(transform_e (Llvm.operand term 2) func_name); 
@@ -369,7 +388,7 @@ let transform_bbpool llf =
     if Array.length (Llvm.basic_blocks llf) = 0 then 
       let entry_bb : Basicblock.t = 
         {func_name=func_name; bb_name=func_name^"#entry"; stmts=[]; 
-        term=Some (Br {bb_name=func_name^"#entry"; succ=Expr.Name {ty=Label; name=exit_bb.bb_name}}); loc=""} in 
+        term=Some (Br {bb_name=func_name^"#entry"; succ=Expr.BasicBlock {name=exit_bb.bb_name}}); loc=""} in 
       let _ = Bbpool.pool := Bbpool.add (func_name^"#entry") entry_bb !Bbpool.pool in ()
     else ()
   in
@@ -414,7 +433,6 @@ let transform_cfg llf : Cfg.t =
 let transform_func llf (*: Function.t*) =
   let _ = Format.printf "transform_func@." in
   let func_name = get_fname llf in
-  let _ = Format.printf "transform_func Debug 1@." in
   let exit_bb = transform_bbpool llf in
   let cfg = transform_cfg llf in
   let cfg, entry_name =
@@ -431,10 +449,7 @@ let transform_func llf (*: Function.t*) =
     [] llparams 
   in
   let func : Function.t = {function_name=func_name; cfg=cfg; params=params; metadata=Empty; entry=entry_name; exit=exit_bb.bb_name} in
-  let meta = Transform_meta.make_alias func in
-  let _ = Format.printf "transform_func Done@." in
-  {func with metadata=meta}
-
+  func
 
 let transform_module llm : Module.t =
   let _ = Format.printf "transform_module@." in
@@ -454,8 +469,10 @@ let transform_module llm : Module.t =
   let function_map = 
     Llvm.fold_left_functions
     (fun (func_map) func -> 
-      let f = transform_func func in 
-      Module.M.add (f.function_name) f func_map
+      if Llvm.is_declaration func then func_map 
+       else
+        let f = transform_func func in 
+        Module.M.add (f.function_name) f func_map
     )
     Module.M.empty
     llm

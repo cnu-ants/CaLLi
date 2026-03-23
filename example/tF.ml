@@ -8,7 +8,7 @@ type memty = AbsMemory.t
 let abs_eval (e : Expr.t) (mem: AbsMemory.t) =
     match e with
     | ConstInt {value; _} -> AbsValue.alpha (IntLiteral value) ""
-    | Name {name;_} -> 
+    | Var {name;_} -> 
     (try (match Env.find name !Env.env with 
     | a -> AbsMemory.find a mem
     ) with _ -> AbsValue.top)
@@ -54,7 +54,7 @@ let prune_value (lhs : string) (rhs : Expr.t) mem =
 
 let prune_predicate (cond : Cond.t) (operand0 : Expr.t) (operand1 : Expr.t) mem =
   match operand0, operand1 with
-  | Expr.Name { name; _ }, _ ->
+  | Expr.Var { name; _ }, _ ->
       let a = Env.find name !Env.env in
       let cur_v = AbsMemory.find a mem in
       let rhs_v = abs_eval operand1 mem in
@@ -64,7 +64,7 @@ let prune_predicate (cond : Cond.t) (operand0 : Expr.t) (operand1 : Expr.t) mem 
       else
         AbsMemory.update a pruned_v mem
 
-  | _, Expr.Name { name; _ } ->
+  | _, Expr.Var { name; _ } ->
       let a = Env.find name !Env.env in
       let cur_v = AbsMemory.find a mem in
       let lhs_v = abs_eval operand0 mem in
@@ -87,7 +87,7 @@ let prune_pointer (lhs : string) (operand : Expr.t) mem =
   let lhs_addr = Env.find lhs !Env.env in
   let lhs_v = AbsMemory.find lhs_addr mem in
   match operand with
-  | Expr.Name { name = src; _ } ->
+  | Expr.Var { name = src; _ } ->
       let src_addr = Env.find src !Env.env in
       let src_v = AbsMemory.find src_addr mem in
       begin
@@ -197,7 +197,7 @@ let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
         let _ = Env.env := Env.add name addr !Env.env in
         mem'
     | ReturnSite {name; ty} ->
-    let res = abs_eval (Expr.Name {ty=ty; name="ret"}) mem in
+    let res = abs_eval (Expr.Var {ty=ty; name="ret"; arg=false}) mem in
 
     let addr = stmt.bb_name^"return" in
     let _ = Env.env := Env.add name addr !Env.env in
@@ -232,7 +232,7 @@ let abs_interp_term' (term : Term.t) (mem : AbsMemory.t) =
             let param = List.nth call_func.params index in
             let res = abs_eval arg mem in
             let addr = bb_name^"param"^(string_of_int index) in
-            let name = (Expr.typed_var_of_expr param).name in
+            let name = Expr.get_name param in
             let _ = Env.env := Env.add name addr !Env.env in
             let mem' = AbsMemory.update addr res mem in
             (mem', index+1)

@@ -28,7 +28,7 @@ let rec pp ppf (ty : t) =
   match ty with
   | Integer {bitwidth} -> Format.fprintf ppf "i%d" bitwidth
   | Float -> Format.fprintf ppf "float"
-  | Pointer {ty} -> Format.fprintf ppf "%a*" pp ty
+  | Pointer _ -> Format.fprintf ppf "ptr" 
   | Vector {size; ty} -> Format.fprintf ppf "<%d x %a>" size pp ty
   | Array {size; ty} -> Format.fprintf ppf "[%d x %a]" size pp ty
   | Label -> Format.fprintf ppf "label"

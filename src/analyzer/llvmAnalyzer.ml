@@ -20,9 +20,16 @@ struct
     let next = function h :: _ -> h | _ -> raise No_more_basicblock
     let pop = function _ :: t -> t | _ -> raise No_more_basicblock
 
-    let ctxt_to_string (ctxt : Ctxt.t) : string = Format.asprintf "%a" Ctxt.pp ctxt
-    let elt_to_string ((bb, ctxt) : elt) : string = bb.bb_name ^ " >> " ^ ctxt_to_string ctxt
-    let to_string_list (wl : t) : string list = List.map elt_to_string wl
+    let ctxt_to_string (ctxt : Ctxt.t) : string =
+      Format.asprintf "%a" Ctxt.pp ctxt
+
+    let elt_to_string ((bb, ctxt) : elt) : string =
+      bb.bb_name ^ " >> " ^ ctxt_to_string ctxt
+
+    let to_string_list (wl : t) : string list =
+      List.map elt_to_string wl
+
+    let length (wl : t) : int = List.length wl
   end
 
   module LoopCounter = struct
@@ -38,6 +45,9 @@ struct
     let lc = ref empty
     let mem = M.mem
     let find = M.find
+
+    let find_opt bb_ctxt =
+      if mem bb_ctxt !lc then Some (find bb_ctxt !lc) else None
 
     let update bb_ctxt =
       lc :=
@@ -87,25 +97,35 @@ struct
         (fun (w, s) ((succ : Basicblock.t), ctxt2) ->
           match States.find_mem_opt (succ, ctxt2) s with
           | Some old_in ->
-              if AbsMem.(out_mem <= old_in) then
+              let leq = AbsMem.(out_mem <= old_in) in
+              if leq then
                 (w, s)
-              else
+              else begin
                 let joined_in = AbsMem.(join old_in out_mem) in
+
                 LoopCounter.update (succ, ctxt2);
+                let do_widen = LoopCounter.widen (succ, ctxt2) in
                 let next_in =
-                  if LoopCounter.widen (succ, ctxt2) then
+                  if do_widen then
                     AbsMem.widen old_in joined_in
                   else
                     joined_in
                 in
-                (Worklist.add (succ, ctxt2) w,
-                 States.update (succ, ctxt2) next_in s)
+
+                let w' = Worklist.add (succ, ctxt2) w in
+                let s' = States.update (succ, ctxt2) next_in s in
+                (w', s')
+              end
+
           | None ->
-              if out_mem = AbsMem.bot then
+              let out_is_bot = (out_mem = AbsMem.bot) in
+              if out_is_bot then
                 (w, s)
-              else
-                (Worklist.add (succ, ctxt2) w,
-                 States.update (succ, ctxt2) out_mem s))
+              else begin
+                let w' = Worklist.add (succ, ctxt2) w in
+                let s' = States.update (succ, ctxt2) out_mem s in
+                (w', s')
+              end)
         (wl', states) next
     in
     (wl'', states'', out_mem)

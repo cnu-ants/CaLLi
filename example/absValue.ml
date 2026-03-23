@@ -104,7 +104,7 @@ module AbsInt =
         if s = S.empty then IntBot else IntSet s
       | IntBot, _ -> IntBot
       | _, IntBot -> IntBot
-      | _ -> failwith "AbsValue.app_slt : not implemented"
+      | _ -> IntTop
     
     let app_ne n1 n2 = 
       match n1, n2 with
@@ -113,7 +113,7 @@ module AbsInt =
         if s = S.empty then IntBot else IntSet s
       | IntBot, _ -> IntBot
       | _, IntBot -> IntBot
-      | _ -> failwith "AbsValue.app_slt : not implemented"
+      | _ -> IntTop
    
     let app_slt n1 n2 = 
       match n1, n2 with
@@ -123,7 +123,7 @@ module AbsInt =
         if s = S.empty then IntBot else IntSet s
       | IntBot, _ -> IntBot
       | _, IntBot -> IntBot
-      | _ -> failwith "AbsValue.app_slt : not implemented"
+      | _ -> IntTop
     
     let app_sge n1 n2 = 
       match n1, n2 with
@@ -133,7 +133,7 @@ module AbsInt =
         if s = S.empty then IntBot else IntSet s
       | IntBot, _ -> IntBot
       | _, IntBot -> IntBot
-      | _ -> failwith "AbsValue.app_slt : not implemented"
+      | _ -> IntTop
 
     module CompOp = struct
       let (==) n1 n2 =
@@ -198,7 +198,7 @@ module AbsInt =
     let widen n1 n2 = 
         if n1 <= n2 then 
           if n1 = n2 then n2
-          else IntBot
+          else IntTop
         else n1
 
     module BinOp = struct
