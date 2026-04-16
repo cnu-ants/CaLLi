@@ -27,7 +27,7 @@ let abs_eval (e : Expr.t) (mem: AbsMemory.t) =
     | ConstInt {value; _} -> AbsValue.alpha (IntLiteral value) ""
     | Name {name;_} -> 
       (try (match Env.find name !Env.env with 
-      | "" -> if name = "Func_main(i32%arg_esp,i8**%argv)i32%arg_esp" then AbsValue.alpha (IntLiteral (Z.of_int !tmp_addr)) "" else AbsValue.top
+      | "" -> if name = "Func_main(i32%arg_esp,i8**%argv)i32%arg_esp" then AbsValue.alpha (IntLiteral (Z.of_int !tmp_addr)) "" else AbsValue.bot
       | a -> AbsMemory.find a mem
       ) with _ -> AbsValue.alpha (IntLiteral (String_addr.id_of_string name)) "" )
     | Void _ -> AbsValue.top
@@ -159,7 +159,7 @@ let rec prune s (v:AbsValue.t) mem (meta : Metadata.t) =
         )
 
         (* SGT *)
-        | Sgt when (v = t)  -> 
+        | Sgt when (v = t)  -> (* true *)
         (match operand0, operand1 with
         | Name {name; _}, ConstInt _ -> 
             let a = Env.find name !Env.env in (* env에서 name의 absAddr을 찾음 *)
@@ -174,10 +174,31 @@ let rec prune s (v:AbsValue.t) mem (meta : Metadata.t) =
         | ConstInt _, Name {name; _} -> 
             let a = Env.find name !Env.env in
             let v = AbsMemory.find a mem in
-            failwith "sgt"
-        | _ -> (*let _ = Format.printf "Prune Slt" in *)mem
+            failwith "sgt" 
+        | Name {name=name0; _}, Name {name=name1; _} ->
+          let a0 = Env.find name0 !Env.env in
+          let v0 = AbsMemory.find a0 mem in
+          let a1 = Env.find name1 !Env.env in
+          let v1 = AbsMemory.find a1 mem in
+          (match v0, v1 with
+          | AbsValue.AbsInt (AbsInterval.IntInterval {min=min1; max=max1}),
+            AbsValue.AbsInt (AbsInterval.IntInterval {min=min2; max=max2}) ->
+              (* x = [max(min1, min2+1), max1] *)
+              let pruned_v0 = AbsValue.AbsInt (AbsInterval.mk_interval (AbsInterval.Elt.max_elt [min1; AbsInterval.Elt.(min2 + AbsInterval.Elt.one)]) max1) in
+              (* y = [min2, min(max1-1, max2)] *)
+              let pruned_v1 = AbsValue.AbsInt (AbsInterval.mk_interval min2 (AbsInterval.Elt.min_elt [AbsInterval.Elt.(max1 - AbsInterval.Elt.one); max2])) in
+              if AbsValue.(pruned_v0 <= AbsValue.bot) || AbsValue.(pruned_v1 <= AbsValue.bot) then
+                AbsMemory.bot
+              else
+                let mem = AbsMemory.update a0 pruned_v0 mem in
+                let mem = AbsMemory.update a1 pruned_v1 mem in
+                let mem = prune name0 pruned_v0 mem meta in
+                let mem = prune name1 pruned_v1 mem meta in
+                mem
+          | _ -> mem)
+        | _ -> (*let _ = Format.printf "Prune Slt" in*) mem
         )
-        | Sgt when (v = f)  -> 
+        | Sgt when (v = f)  -> (* false *)
         (match operand0, operand1 with
         | Name {name; _}, ConstInt _ -> 
             let a = Env.find name !Env.env in
@@ -191,6 +212,27 @@ let rec prune s (v:AbsValue.t) mem (meta : Metadata.t) =
             let a = Env.find name !Env.env in
             let v = AbsMemory.find a mem in
             failwith "slt"
+        | Name {name=name0; _}, Name {name=name1; _} ->
+          let a0 = Env.find name0 !Env.env in
+          let v0 = AbsMemory.find a0 mem in
+          let a1 = Env.find name1 !Env.env in
+          let v1 = AbsMemory.find a1 mem in
+          (match v0, v1 with
+          | AbsValue.AbsInt (AbsInterval.IntInterval {min=min1; max=max1}),
+            AbsValue.AbsInt (AbsInterval.IntInterval {min=min2; max=max2}) ->
+              (* x = [min1, min(max1, max2)] *)
+              let pruned_v0 = AbsValue.AbsInt (AbsInterval.mk_interval min1 (AbsInterval.Elt.min_elt [max1; max2])) in
+              (* y = [max(min1, min2), max2] *)
+              let pruned_v1 = AbsValue.AbsInt (AbsInterval.mk_interval (AbsInterval.Elt.max_elt [min1; min2]) max2) in
+              if AbsValue.(pruned_v0 <= AbsValue.bot) || AbsValue.(pruned_v1 <= AbsValue.bot) then
+                AbsMemory.bot
+              else
+                let mem = AbsMemory.update a0 pruned_v0 mem in
+                let mem = AbsMemory.update a1 pruned_v1 mem in
+                let mem = prune name0 pruned_v0 mem meta in
+                let mem = prune name1 pruned_v1 mem meta in
+                mem
+          | _ -> mem)
         | _ -> mem
         )
 
@@ -213,6 +255,25 @@ let rec prune s (v:AbsValue.t) mem (meta : Metadata.t) =
             let a = Env.find name !Env.env in
             let v = AbsMemory.find a mem in
             failwith "slt"
+        | Name {name=name0; _}, Name {name=name1; _} -> 
+           let a0 = Env.find name0 !Env.env in 
+           let v0 = AbsMemory.find a0 mem in 
+           let a1 = Env.find name1 !Env.env in 
+           let v1 = AbsMemory.find a1 mem in 
+           (match v0, v1 with
+           | AbsValue.AbsInt (AbsInterval.IntInterval {min=min1; max=max1}),
+             AbsValue.AbsInt (AbsInterval.IntInterval {min=min2; max=max2}) ->
+               let pruned_v0 = AbsValue.AbsInt (AbsInterval.mk_interval min1 (AbsInterval.Elt.min_elt [max1; AbsInterval.Elt.(max2 - AbsInterval.Elt.one)])) in
+               let pruned_v1 = AbsValue.AbsInt (AbsInterval.mk_interval (AbsInterval.Elt.max_elt [AbsInterval.Elt.(min1 + AbsInterval.Elt.one); min2]) max2) in
+               if AbsValue.(pruned_v0 <= AbsValue.bot) || AbsValue.(pruned_v1 <= AbsValue.bot) then
+                 AbsMemory.bot
+               else
+                 let mem = AbsMemory.update a0 pruned_v0 mem in
+                 let mem = AbsMemory.update a1 pruned_v1 mem in
+                 let mem = prune name0 pruned_v0 mem meta in
+                 let mem = prune name1 pruned_v1 mem meta in
+                 mem
+           | _ -> mem)
         | _ -> (*let _ = Format.printf "Prune Slt" in *)mem
         )
         | Slt when (v = f)  -> 
@@ -332,19 +393,26 @@ let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
                 let s =  (AbsValue.AbsInt.to_string i) in 
                 AbsValue.AbsAddr.S.add s addrset
               ) i AbsValue.AbsAddr.S.empty
-        | _ -> let _ = Format.printf "%a@.%a@." AbsValue.pp a AbsMemory.pp mem in failwith "InttoPtr err") 
+        | _ -> 
+          let _ = Format.printf "%a@.%a@." AbsValue.pp a AbsMemory.pp mem in 
+          let _ = Format.printf "--\n %a@.%a@.--\n" AbsValue.pp a AbsMemory.pp mem in 
+          let _ = Format.printf "==ENV==\n %a@." Env.pp !Env.env in
+          let _ = Format.printf "&& inttoptr inst &&@." in 
+          let _ = Format.printf "%a@." Inst.pp instr in
+          (* failwith "InttoPtr err")  *)
+          AbsAddr.top)
         in
         let mem' = AbsMemory.update addr (AbsAddr addr') mem in
         let _ = Env.env := Env.add name addr !Env.env in
         mem'
-    (*| Phi {name; incoming; _} -> 
+    | PHI {name; incoming; _} -> 
         let result = List.fold_left (fun acc (value, _) ->
           let v = abs_eval value mem in 
           AbsValue.join acc v 
         ) AbsValue.bot incoming in 
         let addr = stmt.bb_name^(string_of_int stmt.index)^(string_of_int 0) in 
         let _ = Env.env := Env.add name addr !Env.env in 
-        AbsMemory.update addr result mem *)
+        AbsMemory.update addr result mem
     | Load {name; operand; _} -> 
         let addr = stmt.bb_name^(string_of_int stmt.index)^(string_of_int 0) in
         let res = abs_eval operand mem in

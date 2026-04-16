@@ -28,7 +28,7 @@ let abs_eval (e : Expr.t) (mem: AbsMemory.t) =
     | ConstInt {value; _} -> AbsValue.alpha (IntLiteral value) ""
     | Name {name;_} -> 
       (try (match Env.find name !Env.env with 
-      | "" -> if name = "Func_main(i32%arg_esp,i8**%argv)i32%arg_esp" then AbsValue.alpha (IntLiteral (Z.of_int !tmp_addr)) "" else AbsValue.top
+      | "" -> if name = "Func_main(i32%arg_esp,i8**%argv)i32%arg_esp" then AbsValue.alpha (IntLiteral (Z.of_int !tmp_addr)) "" else AbsValue.bot
       | a -> AbsMemory.find a mem
       ) with _ -> AbsValue.alpha (IntLiteral (String_addr.id_of_string name)) "" )
     | Void _ -> AbsValue.top
@@ -333,10 +333,25 @@ let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
                 let s =  (AbsValue.AbsInt.to_string i) in 
                 AbsValue.AbsAddr.S.add s addrset
               ) i AbsValue.AbsAddr.S.empty
-        | _ -> let _ = Format.printf "%a@.%a@." AbsValue.pp a AbsMemory.pp mem in failwith "InttoPtr err") in
+        | _ -> 
+            let _ = Format.printf "--\n %a@.%a@.--\n" AbsValue.pp a AbsMemory.pp mem in 
+            let _ = Format.printf "==ENV==\n %a@." Env.pp !Env.env in
+            let _ = Format.printf "&& inttoptr inst &&@." in 
+            let _ = Format.printf "%a@." Inst.pp instr in
+            (* failwith "InttoPtr err")  *)
+            AbsValue.top)
+        in
         let mem' = AbsMemory.update addr (AbsAddr addr') mem in
         let _ = Env.env := Env.add name addr !Env.env in
         mem'
+    | PHI {name; incoming; _} -> 
+        let result = List.fold_left (fun acc (value, _) ->
+            let v = abs_eval value mem in 
+            AbsValue.join acc v 
+        ) AbsValue.bot incoming in 
+        let addr = stmt.bb_name^(string_of_int stmt.index)^(string_of_int 0) in 
+        let _ = Env.env := Env.add name addr !Env.env in 
+        AbsMemory.update addr result mem
     | Load {name; operand; _} -> 
         let addr = stmt.bb_name^(string_of_int stmt.index)^(string_of_int 0) in
         let res = abs_eval operand mem in

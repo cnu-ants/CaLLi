@@ -18,6 +18,7 @@ type t = BinaryOp of {name:string; op:Op.t; operand0:Expr.t; operand1:Expr.t; ty
             | Prune of {cond:string; value:Expr.t}
             | NPrune of {cond:string; value:Expr.t list}
             | Trunc of {name:string; operand:Expr.t; ty:Type.t}
+            | PHI of {name:string; ty:Type.t; incoming: (Expr.t * Expr.t) list}
             | Other
 
 let pp ppf (inst:t) =
@@ -59,5 +60,11 @@ let pp ppf (inst:t) =
       (fun fmt a -> Format.fprintf fmt "%a" Expr.pp a)) value
   | Trunc {name; operand; ty;} -> 
       Format.fprintf ppf "%s = trunc %a to %a" name Expr.pp operand Type.pp ty
+    | PHI {name; incoming; _} ->
+    Format.fprintf ppf "%s = phi [%a]" name
+    (Format.pp_print_list
+        ~pp_sep:(fun fmt () -> Format.fprintf fmt ", ")
+        (fun fmt (value, label) -> Format.fprintf fmt "%a, %a" Expr.pp value Expr.pp label))
+    incoming
   | Other -> Format.fprintf ppf "Other"
 

@@ -47,6 +47,11 @@ let entry cfg =
     ) cfg all_succs in
   List.hd entrys
 
+let exit cfg = 
+  let exit_node = fold (fun key succs acc -> 
+    if succs = [] then key::acc else acc
+  ) cfg [] in 
+  List.hd exit_node
 
 module Visit = Set.Make(String)
 let visit = ref Visit.empty

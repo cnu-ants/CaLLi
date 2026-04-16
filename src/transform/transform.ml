@@ -265,6 +265,19 @@ let transform_instr instr func_name: Inst.t =
                             {name=(func_name^(get_name instr));
                             operand=(transform_e (Llvm.operand instr 0) func_name);
                             ty=transform_expr_type instr;}
+  (* | Llvm.Opcode.Phi -> Inst.Phi
+                       {name=(func_name^(get_name instr));
+                        ty=transform_expr_type instr;
+                        incoming=} *)
+  | Llvm.Opcode.PHI -> Inst.PHI
+                        {name=(func_name^(get_name instr));
+                        ty=transform_expr_type instr;
+                        incoming=List.map
+                        (fun (value, bb) ->
+                            (transform_e value func_name,
+                              transform_e (Llvm.value_of_block bb) func_name)
+                        )
+                        (Llvm.incoming instr)}
   | _ -> Inst.Other
   in
   res

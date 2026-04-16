@@ -82,9 +82,9 @@ module Make(AbsVal : AbstractDomain.S) : (S with type valty = AbsVal.t) =
     let find x mem = 
       match mem with
       | Mem mem ->
-        if x = "" then AbsVal.top else
+        if x = "" then AbsVal.bot else
           (try M.find x mem
-          with _ -> AbsVal.top)
+          with _ -> AbsVal.bot)
       | MemBot -> AbsVal.bot
 
     let rec update x (v: AbsVal.t) mem = 
@@ -143,11 +143,12 @@ module Make(AbsVal : AbstractDomain.S) : (S with type valty = AbsVal.t) =
     let widen_with_bb bb_name mem1 mem2 =
       match mem1, mem2 with
       | Mem m1, Mem m2 ->
-        Mem (M.union
+        let widen_mem = Mem (M.union
           (fun name v1 v2 ->
             let key = bb_name ^ "::" ^ name in
             Some (AbsVal.widen key v1 v2)
           ) m1 m2)
+          in widen_mem
       | MemBot, MemBot -> MemBot
       | MemBot, Mem _ -> mem2
       | _ -> failwith "mem widen..."

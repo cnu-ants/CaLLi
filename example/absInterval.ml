@@ -353,13 +353,13 @@ module CompOp = struct
 end
 
 
-    let sub n1 n2 = 
-      match n1, n2 with
-      | IntBot, _ -> IntBot
-      | _, IntBot -> n1
-      | IntInterval {min=min0; max=max0}, IntInterval {min=min1; max=max1} ->
-        (*TODO*)
-        n1
+  let sub n1 n2 = 
+    match n1, n2 with
+    | IntBot, _ -> IntBot
+    | _, IntBot -> n1
+    | IntInterval {min=min0; max=max0}, IntInterval {min=min1; max=max1} ->
+      (*TODO*)
+      n1
 
 
       
@@ -477,14 +477,14 @@ let get_min_in_B b n =
   try
     EltSet.fold (fun t acc ->
       (* b의 원소 t를 하나씩 꺼내면서 n보다 작거나 같고 현재까지 찾은 최대값보다 큰 경우에 acc를 변경 *)
-      if Elt.(t <= n) && Elt.(t > acc) then t else acc
+      if Elt.(t < n) && Elt.(t > acc) then t else acc
     ) b MinInf 
   with _ -> MinInf
 
 let get_max_in_B b n =
   try
     EltSet.fold (fun t acc ->
-      if Elt.(t >= n) && Elt.(t < acc) then t else acc 
+      if Elt.(t > n) && Elt.(t < acc) then t else acc 
     ) b MaxInf
   with _ -> MaxInf
 
@@ -495,7 +495,9 @@ let widening_with_B n1 n2 b =
   | IntInterval { min = n1_min; max = n1_max}, IntInterval { min = n2_min; max = n2_max } ->
     let min' = if Elt.(n2_min < n1_min) then get_min_in_B b n2_min else n1_min in
     let max' = if Elt.(n2_max > n1_max) then get_max_in_B b n2_max else n1_max in 
-    IntInterval {min = min'; max = max'}
+    let v = IntInterval {min = min'; max = max'} in 
+    v
+    (* IntInterval {min = min'; max = max'} *)
   (* | IntInterval { min = n1_min; max = n1_max}, IntInterval { min = n2_min; max = n2_max } -> 
     if n1 <= n2 then
       if n1 = n2 then n2
@@ -548,7 +550,7 @@ let fold (f : elt -> 'a -> 'a) (itv : t) (init : 'a) : 'a =
   | IntInterval { min; max } ->
       begin match min, max with
       | MinInf, _ | _, MaxInf ->
-          failwith "fold: infinite interval"
+          failwith "fold: infinite interval!"
       | I lo, I hi ->
           let rec loop i acc =
             if Z.gt i hi then acc

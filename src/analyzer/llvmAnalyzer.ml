@@ -254,9 +254,7 @@ let analyze entry states =
       let _ = summary := States.update (bb, ctxt) mem !summary in
       (* calc memory and context*)
       let mem = TF.transfer bb mem in
-      (*let _ = Format.printf "%s, %a\n@." bb.bb_name Ctxt.pp ctxt in
-      let _ = Format.printf "%a\n@." AbsMem.pp mem in
-      *)let next : (Basicblock.t * Ctxt.t) list = Icfg.next_intra bb ctxt mem !icfg !llmodule in
+      let next : (Basicblock.t * Ctxt.t) list = Icfg.next_intra bb ctxt mem !icfg !llmodule in
       (* update states of bb with updated context and calculated momory *)
       let wl', states' = 
         List.fold_left

@@ -123,24 +123,24 @@ let _ =
   
   (* Set Analzyer*)
   let init_mem = Analyzer2.init (Init.m ())  in
-  let _ = Analyzer2.LoopCounter.set_max_count 5 in
+  let _ = Analyzer2.LoopCounter.set_max_count 10 in
   let init_states = States2.update (entry, MyContext2.empty ()) init_mem States2.empty in
   let _ = Format.printf "set domain analyze...@." in
   let s = Analyzer2.analyze entry init_states in
   let _ = Format.printf "set domain analyze done...@." in
   let s = !Analyzer2.summary in
-  let _ = Format.printf "%a\n" States2.pp s in
-  let _ = Format.printf "ENV \n %a\n" Env.pp !Env.env in
+  (* let _ = Format.printf "%a\n" States2.pp s in
+  let _ = Format.printf "ENV \n %a\n" Env.pp !Env.env in *)
   let b_state = !Analyzer2.summary2 in
   let _ = Format.printf "B STATE %a\n" States2.pp b_state in
   let _ = AbsInterval.global_b := build_threshold_map b_state in
+  let _ = Format.printf "\n--------------------global b\n" in
+  (* let _ = AbsInterval.pp_global_b () in *)
   let _ = Format.printf "\n--------------------\n" in
-  let _ = AbsInterval.pp_global_b () in
-  let _ = Format.printf "\n--------------------\n" in
-  (*let _ = Format.printf "%a\n" States2.pp s2 in *)
+  (* let _ = Format.printf "%a\n" States2.pp s2 in *)
   
   let init_mem = Analyzer.init (Init.m ())  in
-  let _ = Analyzer.LoopCounter.set_max_count 5 in
+  let _ = Analyzer.LoopCounter.set_max_count 10 in
   let init_states = States.update (entry, MyContext.empty ()) init_mem States.empty in
   let _ = Format.printf "analyze...@." in
 
@@ -159,33 +159,44 @@ let _ =
   let _ = Format.printf "second analyze done...@." in
   let s2 = !Analyzer.summary in
   (* let _ = Format.printf "%a\n" States.pp_exit s2 in
-  let _ = Format.printf "ENV \n %a\n" Env.pp !Env.env in *)
-  (*let _ = Format.printf "%a\n" pp_states s in *)
+  let _ = Format.printf "ENV \n %a\n" Env.pp !Env.env in
+  let _ = Format.printf "%a\n" pp_states s in *)
 
   (* s1의 exit memory와 s2의 exit memory 를 비교합시다. 다르면? 주소(변수)죠. 같으면? 상수죠 *)
   let s1_exit_mem = States.find_mem (exit_bb, MyContext.empty ()) s1 in
   let s2_exit_mem = States.find_mem (exit_bb, MyContext.empty ()) s2 in 
   let filtered_mem = AbsMemory.filter_mem s1_exit_mem s2_exit_mem in 
-  let _ = Format.printf "mem \n %a \n" AbsMemory.pp s1_exit_mem in 
-  let _ = Format.printf "filtered mem \n %a \n" AbsMemory.pp filtered_mem in 
-  let _ = Format.printf "ENV\n %a \n" Env.pp !Env.env in 
+  (* let _ = Format.printf "mem \n %a \n" AbsMemory.pp s1_exit_mem in  *)
+  (* let _ = Format.printf "filtered mem \n %a \n" AbsMemory.pp filtered_mem in  *)
+  (* let _ = Format.printf "ENV\n %a \n" Env.pp !Env.env in  *)
   let reverse_env = Env.reverse_env !Env.env in  
 
   let var_set = AbsMemory.group_by_value_with_env filtered_mem reverse_env in 
   let arrays = StackShape.detect_arrays target_f var_set s2_exit_mem in 
-  let stack = StackShape.build_stack_shape var_set arrays in 
-  let _ = StackShape.pp_stack_shape stack var_set in 
+  (* let stack = StackShape.build_stack_shape var_set arrays in 
+  let _ = StackShape.pp_stack_shape stack var_set in  *)
+  let merged_var_set = StackShape.merge_array_vars var_set arrays in
+  let stack_shape = StackShape.build_stack_shape var_set arrays in
+  let _ = StackShape.pp_stack_shape stack_shape var_set in 
+  
+  (* let oc2 = open_out "stack_shape.json" in
+  StackShape.pp_json stack oc2;
+  close_out oc2;
+  Format.printf "stack shape written to stack_shape.json@."; *)
+  let oc2 = open_out "stack_shape.json" in
+  StackShape.pp_json stack_shape oc2;
+  close_out oc2;
 
-  let oc = open_out "output.json" in 
+  let oc = open_out "output.json" in
+  StackShape.pp_var_set_json merged_var_set oc;
+  close_out oc;
+  Format.printf "JSON written to output.json@.";
+
+  (* let oc = open_out "output.json" in 
   let fmt = Format.formatter_of_out_channel oc in 
   AbsMemory.pp_grouped_json_with_env fmt filtered_mem reverse_env;
   Format.pp_print_flush fmt ();
   close_out oc;
-  Format.printf "JSON written to output.json@.";
-
-  let oc2 = open_out "stack_shape.json" in
-  StackShape.pp_json stack oc2;
-  close_out oc2;
-  Format.printf "stack shape written to stack_shape.json@.";
+  Format.printf "JSON written to output.json@."; *)
 
   ()
