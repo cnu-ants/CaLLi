@@ -21,13 +21,23 @@ let set_constraint_cond (cond:Cond.t)  (value:AbsValue.t) (v:AbsValue.t) : AbsVa
     | Sge -> AbsValue.app_sge value v
     | Sgt -> AbsValue.app_sgt value v
     | _ -> failwith "set_constraint_cond : not imple"
+
+let addr_of_name (name : string) : string =
+  name ^ "#addr"
+
+let obj_addr_of_name (name : string) : string =
+  name ^ "#obj"
+
+let ret_addr : string =
+  "#ret"
+
                     
 let abs_eval (e : Expr.t) (mem: AbsMemory.t) =
     match e with
     | ConstInt {value; _} -> AbsValue.alpha (IntLiteral value) ""
     | Name {name;_} -> 
       (try (match Env.find name !Env.env with 
-      | "" -> if name = "Func_main(i32%arg_esp,i8**%argv)i32%arg_esp" then AbsValue.alpha (IntLiteral (Z.of_int !tmp_addr)) "" else AbsValue.bot
+      | "" -> if name = "Func_main(i32%arg_esp,ptr%argv)i32%arg_esp" then AbsValue.alpha (IntLiteral (Z.of_int !tmp_addr)) "" else AbsValue.top
       | a -> AbsMemory.find a mem
       ) with _ -> AbsValue.alpha (IntLiteral (String_addr.id_of_string name)) "" )
     | Void _ -> AbsValue.top
@@ -53,7 +63,7 @@ let nprune s (v:AbsValue.t) mem (meta : Metadata.t) =
         let a = Env.find s' !Env.env in
         let a' = AbsMemory.find a mem in
         (match a' with
-        | AbsAddr a'' ->
+        | AbsAddr (AddrSet a'') ->
             let mem' = AbsValue.AbsAddr.fold
             (fun a mem ->  
                 let v' = AbsMemory.find a mem in 
@@ -63,7 +73,7 @@ let nprune s (v:AbsValue.t) mem (meta : Metadata.t) =
                 (* let _ = Pp.printf ~color:Yellow "%a -> %a\n" AbsValue.pp v' AbsValue.pp v'' in
                 AbsMemory.update a v'' mem  *)
             ) 
-            a'' mem
+            (AddrSet a'') mem
             in mem'
         | _ -> mem (*failwith "Error"*))
     | _ -> mem
@@ -312,7 +322,7 @@ let rec prune s (v:AbsValue.t) mem (meta : Metadata.t) =
           let a = Env.find s' !Env.env in
           let a' = AbsMemory.find a mem in
           (match a' with
-          | AbsAddr a'' ->
+          | AbsAddr (AddrSet a'') ->
             let mem' = AbsValue.AbsAddr.fold
             (fun a mem ->  
                 let v' = AbsMemory.find a mem in 
@@ -321,156 +331,176 @@ let rec prune s (v:AbsValue.t) mem (meta : Metadata.t) =
                      AbsMemory.bot 
                 else  AbsMemory.update a v'' mem 
             ) 
-            a'' mem
+            (AddrSet a'') mem
             in mem'
         | _ -> mem (*failwith "Error"*))
     | None -> mem
     )
     | Empty -> failwith "Nothing to Prune"
 
-
-
-
 let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
     let instr = stmt.inst in
-    (*let _ = Format.printf "%a@." Inst.pp instr in *)
     if mem = AbsMemory.bot then mem else
     match instr with
     | ICmp {name; cond; operand0; operand1; _} ->
-    let v1 = abs_eval operand0 mem in
-    let v2 = abs_eval operand1 mem in
-    let res = AbsValue.compop cond v1 v2 name in
-    let addr = stmt.bb_name^(string_of_int stmt.index)^(string_of_int 0) in
-    let _ = Env.env := Env.add name addr !Env.env in
-    AbsMemory.update addr res mem
-    | Select {name; operand0; operand1; _;} ->
-    let v1 = abs_eval operand0 mem in
-    let v2 = abs_eval operand1 mem in
-    let res = AbsValue.join v1 v2 in
-    let addr = stmt.bb_name^(string_of_int stmt.index)^(string_of_int 0) in
-    let _ = Env.env := Env.add name addr !Env.env in
-    AbsMemory.update addr res mem
+      let v1 = abs_eval operand0 mem in
+      let v2 = abs_eval operand1 mem in
+      let res = AbsValue.compop cond v1 v2 name in
+      let addr = Env.find name !Env.env in
+      AbsMemory.update addr res mem
+
+    | Select {name; operand0; operand1; _} ->
+      let v1 = abs_eval operand0 mem in
+      let v2 = abs_eval operand1 mem in
+      let res = AbsValue.join v1 v2 in
+      let addr = Env.find name !Env.env in
+      AbsMemory.update addr res mem
+
     | BinaryOp {name; op; operand0; operand1; _} ->
-        (*let _ = Format.printf "op2 : %a@." Expr.pp operand1 in*)
-    let v1 = abs_eval operand0 mem in
-    let v2 = abs_eval operand1 mem in
-    let res : AbsValue.t = AbsValue.binop op v1 v2 name in
-    (*let _ = if op = Shl then Format.printf "%a = %a << %a@." AbsValue.pp res AbsValue.pp v1 AbsValue.pp v2 else () in*)
-    let addr = stmt.bb_name^(string_of_int stmt.index)^(string_of_int 0) in
-    let _ = Env.env := Env.add name addr !Env.env in
-    AbsMemory.update addr res mem
+      let v1 = abs_eval operand0 mem in
+      let v2 = abs_eval operand1 mem in
+      let res : AbsValue.t = AbsValue.binop op v1 v2 name in
+      let addr = Env.find name !Env.env in
+      AbsMemory.update addr res mem
+
     | Trunc {name; operand; _}
     | Sext {name; operand; _}
-    | Zext {name; operand; _} -> 
+    | Zext {name; operand; _} ->
       let v = abs_eval operand mem in
-      let addr = stmt.bb_name^(string_of_int stmt.index)^(string_of_int 0) in
-      let _ = Env.env := Env.add name addr !Env.env in
+      let addr = Env.find name !Env.env in
       AbsMemory.update addr v mem
-    | Alloc {name; _} -> 
-        let addr = stmt.bb_name^(string_of_int stmt.index)^(string_of_int 0) in
-        let a = stmt.bb_name^(string_of_int stmt.index)^(string_of_int 1) in
-        let addr' = AbsValue.alpha (AddrLiteral a) name in
-        let mem' = AbsMemory.update addr addr' mem in
-        let _ = Env.env := Env.add name addr !Env.env in
-        mem'
-    | Store {operand; name; _} -> 
-    let v = abs_eval operand mem in
-    let a = Env.find name !Env.env in
-    let a' = AbsMemory.find a mem in
-    (match a' with
-    | AbsAddr a'' ->
-        let mem' = AbsValue.AbsAddr.fold
-        (fun a mem ->  AbsMemory.update a v mem ) a'' mem
-        in mem'
-    | _ ->  mem)
-    | IntToPtr {name; operand; _} ->
-        let addr = stmt.bb_name^(string_of_int stmt.index)^(string_of_int 0) in
-        let a = abs_eval operand mem in
-        let addr' = AbsValue.AbsAddr.AddrSet (match a with 
-        | AbsInt i -> 
-            AbsValue.AbsInt.fold 
-              (fun i addrset -> 
-                let s =  (AbsValue.AbsInt.to_string i) in 
-                AbsValue.AbsAddr.S.add s addrset
-              ) i AbsValue.AbsAddr.S.empty
-        | _ -> 
-          let _ = Format.printf "%a@.%a@." AbsValue.pp a AbsMemory.pp mem in 
-          let _ = Format.printf "--\n %a@.%a@.--\n" AbsValue.pp a AbsMemory.pp mem in 
-          let _ = Format.printf "==ENV==\n %a@." Env.pp !Env.env in
-          let _ = Format.printf "&& inttoptr inst &&@." in 
-          let _ = Format.printf "%a@." Inst.pp instr in
-          failwith "InttoPtr err") 
-        in
-        let mem' = AbsMemory.update addr (AbsAddr addr') mem in
-        let _ = Env.env := Env.add name addr !Env.env in
-        mem'
-    | PHI {name; incoming; _} -> 
-        let result = List.fold_left (fun acc (value, _) ->
-          let v = abs_eval value mem in 
-          AbsValue.join acc v 
-        ) AbsValue.bot incoming in 
-        let addr = stmt.bb_name^(string_of_int stmt.index)^(string_of_int 0) in 
-        let _ = Env.env := Env.add name addr !Env.env in 
-        AbsMemory.update addr result mem
-    | Load {name; operand; _} -> 
-        let addr = stmt.bb_name^(string_of_int stmt.index)^(string_of_int 0) in
-        let res = abs_eval operand mem in
-        let res' = 
-        (match res with
-        | AbsAddr a -> 
-            AbsValue.AbsAddr.fold
-            (fun a' v -> AbsValue.join v (AbsMemory.find a' mem)) a AbsValue.bot
-        | AbsTop -> AbsValue.top
-        | AbsBot -> AbsValue.bot 
-        | AbsInt _ -> AbsValue.top (*
-          let _ = Format.printf "load error inst : %a\n@." Inst.pp stmt.inst in
-          let _ = Format.printf "%a\n" AbsMemory.pp mem in
-          let _ = Format.printf "%a\n" Env.pp !Env.env in
-          let _ = Format.printf "%a\n" AbsValue.pp res in
-          failwith "load error" *)
-        ) in
-        let mem' = AbsMemory.update addr res' mem in
-        let _ = Env.env := Env.add name addr !Env.env in
-        mem'
-    | Prune {cond; value} -> 
-    let a = Env.find cond !Env.env in
-    let v = abs_eval value mem in
-    let bb = Bbpool.find stmt.bb_name !Bbpool.pool in
-    let func = Module.find bb.func_name (Init.llmodule ()) in
-    (*let mem' = AbsMemory.update a v mem in
-    *)let mem'' = prune cond v mem func.metadata in
-    mem''
-    | NPrune {cond; value} ->
-    let a = Env.find cond !Env.env in
-    let v = List.fold_left (fun v' v -> AbsValue.join v' (abs_eval v mem)) AbsValue.bot value in
-    let bb = Bbpool.find stmt.bb_name !Bbpool.pool in
-    let func = Module.find bb.func_name (Init.llmodule ()) in
-    let mem'' = nprune cond v mem func.metadata in
-    mem''    
-    | ReturnSite {name; ty} ->
-    let res = abs_eval (Expr.Name {ty=ty; name="ret"}) mem in
 
-    let addr = stmt.bb_name^"return" in
-    let _ = Env.env := Env.add name addr !Env.env in
-    let mem' = AbsMemory.update addr res mem in
-    mem'      
+    | Alloc {name; _} ->
+      let addr = Env.find name !Env.env in
+      let obj_addr = obj_addr_of_name name in
+      let ptr_v = AbsValue.alpha (AddrLiteral obj_addr) name in
+      let mem' = AbsMemory.update obj_addr AbsValue.bot mem in
+      AbsMemory.update addr ptr_v mem'
+
+    | Store {operand; name; _} ->
+      let v = abs_eval operand mem in
+      let a = Env.find name !Env.env in
+      let a' = AbsMemory.find a mem in
+      (match a' with
+      | AbsAddr a'' ->
+          AbsValue.AbsAddr.fold
+            (fun a mem -> AbsMemory.update a v mem)
+            a'' mem
+      | _ -> mem)
+
+    | IntToPtr {name; operand; _} ->
+      let addr = Env.find name !Env.env in
+      let a = abs_eval operand mem in
+      let mem' =   
+          (match a with
+          | AbsInt i ->
+              let addr' = AbsValue.AbsAddr.AddrSet
+                (AbsValue.AbsInt.fold
+                (fun i addrset ->
+                  let s = AbsValue.AbsInt.to_string i in
+                  AbsValue.AbsAddr.S.add s addrset)
+                i AbsValue.AbsAddr.S.empty)
+              in 
+              AbsMemory.update addr (AbsAddr addr') mem
+          | AbsBot -> 
+              AbsMemory.update addr AbsValue.bot mem
+          | _ -> 
+              AbsMemory.update addr AbsValue.top mem
+
+              (*let _ = Format.printf "%a@.%a@." AbsValue.pp a AbsMemory.pp mem in
+              let _ = Format.printf "--\n %a@.%a@.--\n" AbsValue.pp a AbsMemory.pp mem in
+              let _ = Format.printf "==ENV==\n %a@." Env.pp !Env.env in
+              let _ = Format.printf "&& inttoptr inst &&@." in
+              let _ = Format.printf "%a@." Inst.pp instr in
+              failwith "InttoPtr err")*))
+      in
+      mem'
+
+    | PHI {name; incoming; _} ->
+      let result =
+        List.fold_left
+          (fun acc (value, _) ->
+            let v = abs_eval value mem in
+            AbsValue.join acc v)
+          AbsValue.bot incoming
+      in
+      let addr = Env.find name !Env.env in
+      AbsMemory.update addr result mem
+
+    | Load {name; operand; _} ->
+      let addr = Env.find name !Env.env in
+      let res = abs_eval operand mem in
+      let res' =
+        match res with
+        | AbsAddr a ->
+            AbsValue.AbsAddr.fold
+              (fun a' v -> AbsValue.join v (AbsMemory.find a' mem))
+              a AbsValue.bot
+        | AbsTop -> AbsValue.top
+        | AbsBot -> AbsValue.bot
+        | AbsInt _ -> AbsValue.top
+      in
+      AbsMemory.update addr res' mem
+
+    | Prune {cond; value} ->
+      let _a = Env.find cond !Env.env in
+      let v = abs_eval value mem in
+      let bb = Bbpool.find stmt.bb_name !Bbpool.pool in
+      let func = Module.find bb.func_name (Init.llmodule ()) in
+      let mem'' = prune cond v mem func.metadata in
+      mem''
+
+    | NPrune {cond; value} ->
+      let _a = Env.find cond !Env.env in
+      let v =
+        List.fold_left
+          (fun v' v -> AbsValue.join v' (abs_eval v mem))
+          AbsValue.bot value
+      in
+      let bb = Bbpool.find stmt.bb_name !Bbpool.pool in
+      let func = Module.find bb.func_name (Init.llmodule ()) in
+      let mem'' = nprune cond v mem func.metadata in
+      mem''
+
+    | ReturnSite {name; ty} ->
+      let res = abs_eval (Expr.Name {ty=ty; name="ret"}) mem in
+      let addr = Env.find name !Env.env in
+      AbsMemory.update addr res mem
+
+    | PtrToInt {name; operand; _} ->
+      let v = abs_eval operand mem in
+      let addr = Env.find name !Env.env in
+      let res =
+        match v with
+        | AbsAddr addrs ->
+            let ints =
+              AbsValue.AbsAddr.fold
+                (fun a acc ->
+                  try
+                    let z = Z.of_string a in
+                    AbsValue.join acc (AbsValue.alpha (IntLiteral z) name)
+                  with _ -> AbsValue.top)
+                addrs AbsValue.bot
+            in
+            ints
+        | AbsBot -> AbsValue.bot
+        | _ -> AbsValue.top
+      in
+      AbsMemory.update addr res mem
+
     | _ -> mem
 
-
-
-let abs_interp_term' (term : Term.t) (mem : AbsMemory.t) = 
+let abs_interp_term' (term : Term.t) (mem : AbsMemory.t) =
     if mem = AbsMemory.bot then mem else
     match term with
     | Br _ -> mem
     | CondBr _ -> mem
-    | Ret {ret; bb_name} -> 
-    let res = abs_eval ret mem in
-    let addr = bb_name^(string_of_int (-1))^(string_of_int 0) in
-    let _ = Env.env := Env.add "ret" addr !Env.env in
-    let mem' = AbsMemory.update addr res mem in
-    mem'
+    | Ret {ret; _} ->
+      let res = abs_eval ret mem in
+      let addr = Env.find "ret" !Env.env in
+      AbsMemory.update addr res mem
     | Exit _ -> mem
-    | CallSite {callee; args; bb_name;_} -> mem
+    | CallSite _ -> mem
     | Switch _ -> mem
     | _ -> mem
 
@@ -484,6 +514,23 @@ let abs_interp_global (v : Global.t) mem =
     let _ = Env.env := Env.add v.name addr !Env.env in
     mem'
 
+
+
+let seed_entry_defs_bot (f : Function.t) (mem : AbsMemory.t) : AbsMemory.t =
+  let mem =
+    List.fold_left
+      (fun mem v ->
+        match v with
+        | Expr.Name {name; _} ->
+            let addr = addr_of_name name in
+            let _ = Env.env := Env.add name addr !Env.env in
+            AbsMemory.update addr AbsValue.bot mem
+        | _ -> mem)
+      mem
+      f.vars
+  in
+  let _ = Env.env := Env.add "#ret" ret_addr !Env.env in
+  AbsMemory.update ret_addr AbsValue.bot mem
 
 let transfer (bb : Basicblock.t) (mem : AbsMemory.t)  =
     (*let _ = Format.printf "TF BB : %s@." bb.bb_name in

@@ -54,6 +54,7 @@ end)
 
 module S = Set.Make(String)
 
+
 let expand_intset (s: AbsIntSet.S.t) : AbsInterval.EltSet.t = 
   let base = AbsIntSet.S.fold
   (fun z acc -> AbsInterval.EltSet.add (AbsInterval.I z) acc)
@@ -123,9 +124,14 @@ let _ =
   
   (* Set Analzyer*)
   let init_mem = Analyzer2.init (Init.m ())  in
+  let init_mem = TF2.seed_entry_defs_bot target_f init_mem in
   let _ = Analyzer2.LoopCounter.set_max_count 10 in
   let init_states = States2.update (entry, MyContext2.empty ()) init_mem States2.empty in
   let _ = Format.printf "set domain analyze...@." in
+  let _ = Format.printf "%a\n" States2.pp init_states in
+  let _ = Format.printf "ENV \n %a\n" Env.pp !Env.env in
+  
+  
   let s = Analyzer2.analyze entry init_states in
   let _ = Format.printf "set domain analyze done...@." in
   let s = !Analyzer2.summary in
@@ -140,6 +146,7 @@ let _ =
   (* let _ = Format.printf "%a\n" States2.pp s2 in *)
   
   let init_mem = Analyzer.init (Init.m ())  in
+  let init_mem = TF.seed_entry_defs_bot target_f init_mem in
   let _ = Analyzer.LoopCounter.set_max_count 10 in
   let init_states = States.update (entry, MyContext.empty ()) init_mem States.empty in
   let _ = Format.printf "analyze...@." in
@@ -198,5 +205,4 @@ let _ =
   Format.pp_print_flush fmt ();
   close_out oc;
   Format.printf "JSON written to output.json@."; *)
-
   ()
