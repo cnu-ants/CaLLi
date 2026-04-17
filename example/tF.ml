@@ -399,8 +399,7 @@ let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
           let _ = Format.printf "==ENV==\n %a@." Env.pp !Env.env in
           let _ = Format.printf "&& inttoptr inst &&@." in 
           let _ = Format.printf "%a@." Inst.pp instr in
-          (* failwith "InttoPtr err")  *)
-          AbsAddr.top)
+          failwith "InttoPtr err") 
         in
         let mem' = AbsMemory.update addr (AbsAddr addr') mem in
         let _ = Env.env := Env.add name addr !Env.env in
