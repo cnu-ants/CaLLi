@@ -122,14 +122,16 @@ let _ =
   let entry = Bbpool.find (target_f.entry) !Bbpool.pool in
   let exit_bb = Bbpool.find (Cfg.exit target_f.cfg) !Bbpool.pool in  
   
+  let _ = Format.printf "--CFG--\n %a@." Cfg.pp target_f.cfg in 
+
   (* Set Analzyer*)
   let init_mem = Analyzer2.init (Init.m ())  in
   let init_mem = TF2.seed_entry_defs_bot target_f init_mem in
   let _ = Analyzer2.LoopCounter.set_max_count 10 in
   let init_states = States2.update (entry, MyContext2.empty ()) init_mem States2.empty in
   let _ = Format.printf "set domain analyze...@." in
-  let _ = Format.printf "%a\n" States2.pp init_states in
-  let _ = Format.printf "ENV \n %a\n" Env.pp !Env.env in
+  (* let _ = Format.printf "%a\n" States2.pp init_states in
+  let _ = Format.printf "ENV \n %a\n" Env.pp !Env.env in *)
   
   
   let s = Analyzer2.analyze entry init_states in
@@ -141,7 +143,7 @@ let _ =
   let _ = Format.printf "B STATE %a\n" States2.pp b_state in
   let _ = AbsInterval.global_b := build_threshold_map b_state in
   let _ = Format.printf "\n--------------------global b\n" in
-  (* let _ = AbsInterval.pp_global_b () in *)
+  let _ = AbsInterval.pp_global_b () in
   let _ = Format.printf "\n--------------------\n" in
   (* let _ = Format.printf "%a\n" States2.pp s2 in *)
   

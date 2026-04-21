@@ -255,6 +255,11 @@ let analyze entry states =
       (* calc memory and context*)
       let mem = TF.transfer bb mem in
       let next : (Basicblock.t * Ctxt.t) list = Icfg.next_intra bb ctxt mem !icfg !llmodule in
+
+      let _ = Format.printf "BB: %s successors: %s\n" 
+      bb.bb_name 
+      (String.concat ", " (List.map (fun (b, _) -> b.Basicblock.bb_name) next)) in
+
       (* update states of bb with updated context and calculated momory *)
       let wl', states' = 
         List.fold_left
