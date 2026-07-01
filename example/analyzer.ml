@@ -122,12 +122,15 @@ let _ =
   let entry = Bbpool.find (target_f.entry) !Bbpool.pool in
   let exit_bb = Bbpool.find (Cfg.exit target_f.cfg) !Bbpool.pool in  
   
-  let _ = Format.printf "--CFG--\n %a@." Cfg.pp target_f.cfg in 
+  (* let _ = Format.printf "--CFG--\n %a@." Cfg.pp target_f.cfg in *)
+  let module Dot = To_dot.Make(States2) in
+  let _ = Dot.func_to_dot target_f in
 
   (* Set Analzyer*)
   let init_mem = Analyzer2.init (Init.m ())  in
   let init_mem = TF2.seed_entry_defs_bot target_f init_mem in
   let _ = Analyzer2.LoopCounter.set_max_count 10 in
+  (* let init_mem = TF2.seed_argv_addrs init_mem in *)
   let init_states = States2.update (entry, MyContext2.empty ()) init_mem States2.empty in
   let _ = Format.printf "set domain analyze...@." in
   (* let _ = Format.printf "%a\n" States2.pp init_states in
@@ -142,19 +145,24 @@ let _ =
   let b_state = !Analyzer2.summary2 in
   let _ = Format.printf "B STATE %a\n" States2.pp b_state in
   let _ = AbsInterval.global_b := build_threshold_map b_state in
-  let _ = Format.printf "\n--------------------global b\n" in
+  (* let _ = Format.printf "\n--------------------global b\n" in
   let _ = AbsInterval.pp_global_b () in
-  let _ = Format.printf "\n--------------------\n" in
+  let _ = Format.printf "\n--------------------\n" in *)
   (* let _ = Format.printf "%a\n" States2.pp s2 in *)
   
-  let init_mem = Analyzer.init (Init.m ())  in
+  (* let init_mem = Analyzer.init (Init.m ())  in
   let init_mem = TF.seed_entry_defs_bot target_f init_mem in
   let _ = Analyzer.LoopCounter.set_max_count 10 in
-  let init_states = States.update (entry, MyContext.empty ()) init_mem States.empty in
+  let init_states = States.update (entry, MyContext.empty ()) init_mem States.empty in *)
+  let base_mem = Analyzer.init (Init.m ()) in
+  let base_mem = TF.seed_entry_defs_bot target_f base_mem in
+  let _ = Analyzer.LoopCounter.set_max_count 10 in
   let _ = Format.printf "analyze...@." in
 
   (* Set arg_esp address as 100000*)
   let _ = TF.tmp_addr := 100000 in
+  let init_mem = TF.seed_argv_addrs base_mem in 
+  let init_states = States.update (entry, MyContext.empty ()) init_mem States.empty in
   let s = Analyzer.analyze entry init_states in
   let _ = Format.printf "first analyze done...@." in
   let s1 = !Analyzer.summary in
@@ -164,12 +172,14 @@ let _ =
   (* Set arg_esp address as 200000*)
   let _ = Analyzer.LoopCounter.reset () in
   let _ = TF.tmp_addr := 200000 in
+  let init_mem = TF.seed_argv_addrs base_mem in 
+  let init_states = States.update (entry, MyContext.empty ()) init_mem States.empty in
   let s = Analyzer.analyze entry init_states in
   let _ = Format.printf "second analyze done...@." in
   let s2 = !Analyzer.summary in
   (* let _ = Format.printf "%a\n" States.pp_exit s2 in
-  let _ = Format.printf "ENV \n %a\n" Env.pp !Env.env in
-  let _ = Format.printf "%a\n" pp_states s in *)
+  let _ = Format.printf "ENV \n %a\n" Env.pp !Env.env in *)
+  (* let _ = Format.printf "%a\n" pp_states s in *)
 
   (* s1의 exit memory와 s2의 exit memory 를 비교합시다. 다르면? 주소(변수)죠. 같으면? 상수죠 *)
   let s1_exit_mem = States.find_mem (exit_bb, MyContext.empty ()) s1 in
@@ -179,6 +189,8 @@ let _ =
   (* let _ = Format.printf "filtered mem \n %a \n" AbsMemory.pp filtered_mem in  *)
   (* let _ = Format.printf "ENV\n %a \n" Env.pp !Env.env in  *)
   let reverse_env = Env.reverse_env !Env.env in  
+
+  let _ = Format.printf "state compare done...@." in
 
   let var_set = AbsMemory.group_by_value_with_env filtered_mem reverse_env in 
   let arrays = StackShape.detect_arrays target_f var_set s2_exit_mem in 

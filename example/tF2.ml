@@ -38,7 +38,7 @@ let abs_eval (e : Expr.t) (mem: AbsMemory.t) =
     | ConstInt {value; _} -> AbsValue.alpha (IntLiteral value) ""
     | Name {name;_} -> 
       (try (match Env.find name !Env.env with 
-      | "" -> if name = "Func_main(i32%arg_esp,i8**%argv)i32%arg_esp" then AbsValue.alpha (IntLiteral (Z.of_int !tmp_addr)) "" else AbsValue.top
+      | "" -> if name = "Func_main(i32%arg_esp)i32%arg_esp" then AbsValue.alpha (IntLiteral (Z.of_int !tmp_addr)) "" else AbsValue.top
       | a -> AbsMemory.find a mem
       ) with _ -> AbsValue.alpha (IntLiteral (String_addr.id_of_string name)) "" )
     | Void _ -> AbsValue.top
@@ -368,7 +368,7 @@ let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
       let addr = Env.find name !Env.env in
       AbsMemory.update addr result mem
 
-    | Load {name; operand; _} ->
+    (* | Load {name; operand; _} ->
       let addr = Env.find name !Env.env in
       let res = abs_eval operand mem in
       let res' =
@@ -381,7 +381,32 @@ let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
         | AbsBot -> AbsValue.bot
         | AbsInt _ -> AbsValue.top
       in
-      AbsMemory.update addr res' mem
+      AbsMemory.update addr res' mem *)
+      | Load {name; operand; _} ->
+        let addr = Env.find name !Env.env in
+        let res = abs_eval operand mem in
+        (* 디버그 1: operand의 추상값 확인 *)
+        let _ = Format.printf "[DEBUG Load] name=%s, operand res=%a\n" name AbsValue.pp res in
+        let res' =
+          match res with
+          | AbsAddr a ->
+              let result = AbsValue.AbsAddr.fold
+                (fun a' v -> 
+                  let loaded = AbsMemory.find a' mem in
+                  (* 디버그 2: 각 주소에서 읽은 값 확인 *)
+                  let _ = Format.printf "[DEBUG Load] addr=%s, loaded=%a, acc=%a\n" 
+                            a' AbsValue.pp loaded AbsValue.pp v in
+                  AbsValue.join v loaded)
+                a AbsValue.bot
+              in
+              (* 디버그 3: fold 최종 결과 확인 *)
+              let _ = Format.printf "[DEBUG Load] fold result=%a\n" AbsValue.pp result in
+              result
+          | AbsTop -> AbsValue.top
+          | AbsBot -> AbsValue.bot
+          | AbsInt _ -> AbsValue.top
+        in
+        AbsMemory.update addr res' mem
 
     | Prune {cond; value} ->
       let _a = Env.find cond !Env.env in
@@ -471,6 +496,18 @@ let seed_entry_defs_bot (f : Function.t) (mem : AbsMemory.t) : AbsMemory.t =
   in
   let _ = Env.env := Env.add "ret" ret_addr !Env.env in
   AbsMemory.update ret_addr AbsValue.bot mem
+
+let seed_argv_addrs (mem : AbsMemory.t) : AbsMemory.t =
+  let magic = !tmp_addr in
+  let rec loop mem i =
+    if i > 100 then mem
+    else
+      let addr = magic + (i * 4) in
+      let mem = AbsMemory.update (string_of_int addr) AbsValue.top mem in
+      loop mem (i + 1)
+  in
+  loop mem 1
+
 
 let transfer (bb : Basicblock.t) (mem : AbsMemory.t)  =
     (*let _ = Format.printf "TF BB : %s@." bb.bb_name in

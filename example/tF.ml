@@ -94,6 +94,7 @@ let rec prune s (v:AbsValue.t) mem (meta : Metadata.t) =
     | Meta {alias} ->
     (match Metadata.Alias.find_opt s alias with
     | Some (Predicate {cond; operand0; operand1}) -> 
+        let _ =Format.printf "alias of %s: Predicate %a %a %a\n" s Cond.pp cond Expr.pp operand0 Expr.pp operand1 in
         (*let _ = Format.printf "PRUNE %a %a %a@." Cond.pp cond Expr.pp operand0 Expr.pp operand1 in
         let _ = Format.printf "CURRENT %a %a@." Expr.pp operand0 AbsValue.pp (abs_eval operand0 mem) in *)
         (match cond with
@@ -166,7 +167,7 @@ let rec prune s (v:AbsValue.t) mem (meta : Metadata.t) =
             let a = Env.find name1 !Env.env in
             let v =  AbsMemory.find a mem in
             mem
-        | _ -> (* let _ = Format.printf "prune not implemeted yet" in *) mem
+        | _ -> let _ = Format.printf "prune not implemeted yet" in mem
         )
 
         (* SGT *)
@@ -191,12 +192,7 @@ let rec prune s (v:AbsValue.t) mem (meta : Metadata.t) =
           let v0 = AbsMemory.find a0 mem in
           let a1 = Env.find name1 !Env.env in
           let v1 = AbsMemory.find a1 mem in
-          (* let _ = Format.printf "before prune: %s -> %a, %s -> %a\n" name0 AbsValue.pp v0 name1 AbsValue.pp v1 in *)
-          
-          let _ = Format.printf "Sgt prune: %s=%a, %s=%a\n"
-          name0 AbsValue.pp v0
-          name1 AbsValue.pp v1 in
-          
+          let _ = Format.printf "prune sgt true\nbefore prune: %s -> %a, %s -> %a\n" name0 AbsValue.pp v0 name1 AbsValue.pp v1 in
           (match v0, v1 with
           | AbsValue.AbsInt (AbsInterval.IntInterval {min=min1; max=max1}),
             AbsValue.AbsInt (AbsInterval.IntInterval {min=min2; max=max2}) ->
@@ -204,11 +200,7 @@ let rec prune s (v:AbsValue.t) mem (meta : Metadata.t) =
               let pruned_v0 = AbsValue.AbsInt (AbsInterval.mk_interval (AbsInterval.Elt.max_elt [min1; AbsInterval.Elt.(min2 + AbsInterval.Elt.one)]) max1) in
               (* y = [min2, min(max1-1, max2)] *)
               let pruned_v1 = AbsValue.AbsInt (AbsInterval.mk_interval min2 (AbsInterval.Elt.min_elt [AbsInterval.Elt.(max1 - AbsInterval.Elt.one); max2])) in
-              (* let _ = Format.printf "after prune: %s -> %a, %s -> %a\n" name0 AbsValue.pp pruned_v0 name1 AbsValue.pp pruned_v1 in *)
-              
-              let _ = Format.printf "pruned_v0=%a, pruned_v1=%a\n"
-              AbsValue.pp pruned_v0 AbsValue.pp pruned_v1 in
-              
+              let _ = Format.printf "after prune: %s -> %a, %s -> %a\n" name0 AbsValue.pp pruned_v0 name1 AbsValue.pp pruned_v1 in
               if AbsValue.(pruned_v0 <= AbsValue.bot) || AbsValue.(pruned_v1 <= AbsValue.bot) then
                 AbsMemory.bot
               else
@@ -239,7 +231,7 @@ let rec prune s (v:AbsValue.t) mem (meta : Metadata.t) =
           let v0 = AbsMemory.find a0 mem in
           let a1 = Env.find name1 !Env.env in
           let v1 = AbsMemory.find a1 mem in
-          let _ = Format.printf "before prune: %s -> %a, %s -> %a\n" name0 AbsValue.pp v0 name1 AbsValue.pp v1 in
+          let _ = Format.printf "prune sgt false\nbefore prune: %s -> %a, %s -> %a\n" name0 AbsValue.pp v0 name1 AbsValue.pp v1 in
           (match v0, v1 with
           | AbsValue.AbsInt (AbsInterval.IntInterval {min=min1; max=max1}),
             AbsValue.AbsInt (AbsInterval.IntInterval {min=min2; max=max2}) ->
@@ -323,16 +315,19 @@ let rec prune s (v:AbsValue.t) mem (meta : Metadata.t) =
         | _ -> mem
         )
     | Some (Pointer e) ->
-        let a = Env.find s !Env.env in
-        let v' =  AbsMemory.find a mem in
-        let pruned_v = AbsValue.meet v v' in 
+        let _ = Format.printf "alias of %s: Pointer %a\n" s Expr.pp e in
+        let a = Env.find s !Env.env in (* abstract addr 가져옴 *)
+        let v' =  AbsMemory.find a mem in (* abstract value 가져옴 *)
+        let pruned_v = AbsValue.meet v v' in (* prune하려는 값(v)과 현재값(v')을 meet *)
         if AbsValue.(pruned_v <= (AbsValue.bot)) then 
           AbsMemory.bot
         else 
           let mem = AbsMemory.update a pruned_v mem in
-          let s' = (match e with
+          let s' = 
+            (match e with
             | Name {name; _;} -> name 
-            | _ -> failwith "error1") in
+            | _ -> failwith "error1") 
+          in
           let a = Env.find s' !Env.env in
           let a' = AbsMemory.find a mem in
           (match a' with
@@ -341,9 +336,14 @@ let rec prune s (v:AbsValue.t) mem (meta : Metadata.t) =
             (fun a mem ->  
                 let v' = AbsMemory.find a mem in 
                 let v'' = AbsValue.meet pruned_v v' in 
+                let _ = Format.printf "Pointer fold: addr=%s v'=%a pruned_v=%a meet=%a\n"
+    a AbsValue.pp v' AbsValue.pp pruned_v AbsValue.pp v'' in
                 if AbsValue.(v'' <= (AbsValue.bot)) then
+                  let _ = Format.printf "→ bot! addr=%s v'=%a pruned_v=%a\n" 
+                  a AbsValue.pp v' AbsValue.pp pruned_v in
                      AbsMemory.bot 
                 else  AbsMemory.update a v'' mem 
+                (* AbsMemory.update a pruned_v mem *)
             ) 
             (AddrSet a'') mem
             in mem'
@@ -439,11 +439,9 @@ let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
           AbsValue.bot incoming
       in
       let addr = Env.find name !Env.env in
-      let _ = Format.printf "PHI %s addr=%s result=%a\n" 
-      name addr AbsValue.pp result in
       AbsMemory.update addr result mem
 
-    | Load {name; operand; _} ->
+    (* | Load {name; operand; _} ->
       let addr = Env.find name !Env.env in
       let res = abs_eval operand mem in
       let res' =
@@ -456,7 +454,32 @@ let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
         | AbsBot -> AbsValue.bot
         | AbsInt _ -> AbsValue.top
       in
-      AbsMemory.update addr res' mem
+      AbsMemory.update addr res' mem *)
+      | Load {name; operand; _} ->
+        let addr = Env.find name !Env.env in
+        let res = abs_eval operand mem in
+        (* 디버그 1: operand의 추상값 확인 *)
+        let _ = Format.printf "[DEBUG Load] name=%s, operand res=%a\n" name AbsValue.pp res in
+        let res' =
+          match res with
+          | AbsAddr a ->
+              let result = AbsValue.AbsAddr.fold
+                (fun a' v -> 
+                  let loaded = AbsMemory.find a' mem in
+                  (* 디버그 2: 각 주소에서 읽은 값 확인 *)
+                  let _ = Format.printf "[DEBUG Load] addr=%s, loaded=%a, acc=%a\n" 
+                            a' AbsValue.pp loaded AbsValue.pp v in
+                  AbsValue.join v loaded)
+                a AbsValue.bot
+              in
+              (* 디버그 3: fold 최종 결과 확인 *)
+              let _ = Format.printf "[DEBUG Load] fold result=%a\n" AbsValue.pp result in
+              result
+          | AbsTop -> AbsValue.top
+          | AbsBot -> AbsValue.bot
+          | AbsInt _ -> AbsValue.top
+        in
+        AbsMemory.update addr res' mem
 
     | Prune {cond; value} ->
       let _a = Env.find cond !Env.env in
@@ -506,6 +529,74 @@ let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
 
     | _ -> mem
 
+(* s 안에 sub가 부분 문자열로 들어있는지 *)
+let contains_substring s sub =
+  let ls = String.length s and lsub = String.length sub in
+  let rec aux i =
+    if i + lsub > ls then false
+    else if String.sub s i lsub = sub then true
+    else aux (i + 1)
+  in
+  aux 0
+
+(* memset(dst, c, n): dst부터 n바이트를 c로 채운다.
+   현재는 "단일 주소 dst, 상수 n, c=0" 케이스만 strong update로 처리.
+   그 외에는 failwith로 막아두고, 실제로 마주치면 그때 확장한다.
+   void call이라 반환값(ret) 설정은 생략. *)
+   let model_memset (args : Expr.t list) (mem : AbsMemory.t) : AbsMemory.t =
+    (* args = [dst; c; n; isvolatile] *)
+    let dst_e, c_e, n_e =
+      match args with
+      | dst :: c :: n :: _ -> (dst, c, n)
+      | _ -> failwith "model_memset: unexpected number of args"
+    in
+    let dst = abs_eval dst_e mem in
+    let c   = abs_eval c_e mem in
+    let n   = abs_eval n_e mem in
+  
+    (* 가드 1: dst가 단일 주소인가 *)
+    let base_str =
+      match dst with
+      | AbsValue.AbsAddr a when AbsValue.AbsAddr.is_singleton a ->
+          AbsValue.AbsAddr.min_elt a
+      | _ -> failwith "model_memset: dst is not a single address"
+    in
+  
+    (* 가드 2: base가 숫자 주소인가 *)
+    let base_int =
+      try int_of_string base_str
+      with _ -> failwith "model_memset: dst address is not numeric"
+    in
+  
+    (* 가드 3: c가 0인가 *)
+    let zero = AbsValue.alpha_int (Z.of_int 0) in
+    let _ =
+      if not (AbsValue.equal c zero) then
+        failwith "model_memset: c is not zero"
+    in
+  
+    (* 가드 4: n이 상수인가, 그 값을 int로 *)
+    let n_int =
+      match n with
+      | AbsValue.AbsInt (AbsInterval.IntInterval {min; max})
+        when AbsInterval.Elt.(min == max) ->
+          (match min with
+           | AbsInterval.I z -> Z.to_int z
+           | _ -> failwith "model_memset: n is infinite")
+      | _ -> failwith "model_memset: n is not a constant"
+    in
+  
+    (* 효과: base부터 4씩, n_int/4칸을 0으로 strong update *)
+    let num_slots = n_int / 4 in
+    let rec fill mem i =
+      if i >= num_slots then mem
+      else
+        let addr = string_of_int (base_int + i * 4) in
+        let mem = AbsMemory.update addr zero mem in
+        fill mem (i + 1)
+    in
+    fill mem 0
+    
 let abs_interp_term' (term : Term.t) (mem : AbsMemory.t) =
     if mem = AbsMemory.bot then mem else
     match term with
@@ -516,7 +607,10 @@ let abs_interp_term' (term : Term.t) (mem : AbsMemory.t) =
       let addr = Env.find "ret" !Env.env in
       AbsMemory.update addr res mem
     | Exit _ -> mem
-    | CallSite _ -> mem
+    (* | CallSite _ -> mem *)
+    | CallSite {callee; args; _} ->
+      if contains_substring callee "memset" then model_memset args mem
+      else mem
     | Switch _ -> mem
     | _ -> mem
 
@@ -529,7 +623,6 @@ let abs_interp_global (v : Global.t) mem =
     let mem' = AbsMemory.update a res mem' in
     let _ = Env.env := Env.add v.name addr !Env.env in
     mem'
-
 
 
 let seed_entry_defs_bot (f : Function.t) (mem : AbsMemory.t) : AbsMemory.t =
@@ -547,6 +640,17 @@ let seed_entry_defs_bot (f : Function.t) (mem : AbsMemory.t) : AbsMemory.t =
   in
   let _ = Env.env := Env.add "#ret" ret_addr !Env.env in
   AbsMemory.update ret_addr AbsValue.bot mem
+
+  let seed_argv_addrs (mem : AbsMemory.t) : AbsMemory.t =
+    let magic = !tmp_addr in
+    let rec loop mem i =
+      if i > 100 then mem
+      else
+        let addr = magic + (i * 4) in
+        let mem = AbsMemory.update (string_of_int addr) AbsValue.top mem in
+        loop mem (i + 1)
+    in
+    loop mem 1
 
 let transfer (bb : Basicblock.t) (mem : AbsMemory.t)  =
     let mem' = List.fold_left

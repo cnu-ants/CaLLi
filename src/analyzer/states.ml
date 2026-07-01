@@ -64,9 +64,22 @@ module Make (Ctxt : Context.S) (AbsMem : AbstractMemory.S) : (S with type ctxtty
 
     (* let find = M.find *)
 
-    let find_mem (bb_ctxt : Basicblock.t * Ctxt.t) s = 
+    (* let find_mem (bb_ctxt : Basicblock.t * Ctxt.t) s = 
       let (bb, ctxt) = bb_ctxt in 
-      try CtxtM.find ctxt (M.find bb s) with Not_found -> raise No_state
+      try CtxtM.find ctxt (M.find bb s) with Not_found -> raise No_state *)
+      let find_mem (bb_ctxt : Basicblock.t * Ctxt.t) s = 
+        let (bb, ctxt) = bb_ctxt in 
+        try CtxtM.find ctxt (M.find bb s) 
+        with Not_found -> 
+          if not (M.mem bb s) then
+            Format.printf "[No_state] BB not found: %s@." bb.bb_name
+          else begin
+            Format.printf "[No_state] BB found (%s) but ctxt not found@." bb.bb_name;
+            Format.printf "  looking for ctxt: %a@." Ctxt.pp ctxt;
+            let available = M.find bb s |> CtxtM.bindings |> List.map fst in
+            List.iter (fun c -> Format.printf "  available ctxt: %a@." Ctxt.pp c) available
+          end;
+          raise No_state
 
     let find_mem_option (bb, ctxt) s = 
       try CtxtM.find_opt ctxt (M.find bb s) with Not_found -> None

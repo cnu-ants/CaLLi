@@ -241,6 +241,7 @@ let analyze entry states =
       let bb, ctxt = Worklist.next wl in
       let wl' = Worklist.pop wl in
       let preds : Basicblock.t list = Icfg.preds_intra bb !icfg !llmodule in
+      let init_mem = States.find_mem (entry, ctxt) states in 
       let mem : AbsMem.t = 
         List.fold_left
         (fun mem pred_bb -> 
@@ -249,17 +250,13 @@ let analyze entry states =
             AbsMem.(join m mem)
           | None -> mem
         )
-        AbsMem.empty preds in
+        (*AbsMem.empty preds in*)
+        init_mem preds in
       let mem = if bb != entry && mem = AbsMem.empty then AbsMem.bot else mem in 
       let _ = summary := States.update (bb, ctxt) mem !summary in
       (* calc memory and context*)
       let mem = TF.transfer bb mem in
       let next : (Basicblock.t * Ctxt.t) list = Icfg.next_intra bb ctxt mem !icfg !llmodule in
-
-      let _ = Format.printf "BB: %s successors: %s\n" 
-      bb.bb_name 
-      (String.concat ", " (List.map (fun (b, _) -> b.Basicblock.bb_name) next)) in
-
       (* update states of bb with updated context and calculated momory *)
       let wl', states' = 
         List.fold_left

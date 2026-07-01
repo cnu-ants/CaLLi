@@ -79,13 +79,27 @@ module Make(AbsVal : AbstractDomain.S) : (S with type valty = AbsVal.t) =
         M.find_opt x mem
       | MemBot -> None
 
-    let find x mem = 
+    (* let find x mem = 
       match mem with
       | Mem mem ->
         if x = "" then AbsVal.bot else
           (try M.find x mem
           with _ -> AbsVal.bot)
-      | MemBot -> AbsVal.bot
+      | MemBot -> AbsVal.bot *)
+      let find x mem = 
+        match mem with
+        | Mem mem ->
+          if x = "" then AbsVal.bot else
+            (try 
+              let v = M.find x mem in
+              let _ = Format.printf "[DEBUG find] key=%s, result=%a\n" x AbsVal.pp v in
+              v
+            with _ -> 
+              let _ = Format.printf "[DEBUG find] key=%s, NOT FOUND -> bot\n" x in
+              AbsVal.bot)
+        | MemBot -> 
+          let _ = Format.printf "[DEBUG find] key=%s, MemBot -> bot\n" x in
+          AbsVal.bot
 
     let rec update x (v: AbsVal.t) mem = 
       match mem with 
