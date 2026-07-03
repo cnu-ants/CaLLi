@@ -1,0 +1,14 @@
+{
+  "variables": [
+    {"offset": "#xfffffffc", "start": -4, "end": 0},
+    {"offset": "#xffffffe0", "start": -32, "end": -28},
+    {"offset": "#xffffffdc", "start": -36, "end": -32},
+    {"offset": "#xffffffd8", "start": -40, "end": -36},
+    {"offset": "#xffffffd4", "start": -44, "end": -40},
+    {"offset": "#xffffffd0", "start": -48, "end": -44}
+  ],
+  "arrays": [
+    {"offset": "#xfffffff2", "start": -14, "end": -6, "size": 2, "element_size": 4},
+    {"offset": "#xffffffe4", "start": -28, "end": -16, "size": 3, "element_size": 4}
+  ]
+}
