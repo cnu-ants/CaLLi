@@ -193,30 +193,46 @@ let _ =
   let _ = Format.printf "state compare done...@." in
 
   let var_set = AbsMemory.group_by_value_with_env filtered_mem reverse_env in 
-  let arrays = StackShape.detect_arrays target_f var_set s2_exit_mem in 
-  (* let stack = StackShape.build_stack_shape var_set arrays in 
-  let _ = StackShape.pp_stack_shape stack var_set in  *)
-  let merged_var_set = StackShape.merge_array_vars var_set arrays in
-  let stack_shape = StackShape.build_stack_shape var_set arrays in
+
+  (* loop 기반 덩어리를 찾아 chunks에 합친다 *)
+  let loop_chunks = StackShape.detect_loop_chunks target_f var_set s1_exit_mem in
+  let _ = List.iter (fun (s, e) -> TF.add_chunk s e) loop_chunks in
+
+  let _ = Format.printf "=== Raw Chunks (before merge) ===@." in
+  let _ = List.iter (fun (s, e) -> Format.printf "  [%d ~ %d]@." s e) !TF.chunks in
+  let _ = List.iter (fun (s, e) -> Format.printf "  [%d ~ %d]@." s e) loop_chunks in
+
+  (* memset/memcpy/loop가 모은 모든 chunk를 병합 *)
+  let merged_chunks = StackShape.merge_chunks !TF.chunks in
+  let _ = Format.printf "=== Merged Chunks ===@." in
+  let _ = List.iter (fun (s, e) ->
+    Format.printf "  [%d ~ %d]@." s e) merged_chunks in
+
+  (* offset -> 폭 집합 매핑 수집 후 출력으로 확인 *)
+  let offset_types = StackShape.collect_offset_types target_f s1_exit_mem in
+  let array_widths = StackShape.collect_array_widths target_f var_set s1_exit_mem in
+  let stack_shape = StackShape.build_stack_shape var_set merged_chunks offset_types array_widths in
+  let _ = Format.printf "=== Offset Types ===@." in
+  let _ = 
+    Hashtbl.fold (fun offset widths acc -> (offset, widths) :: acc) offset_types []
+    |> List.sort (fun (a, _) (b, _) -> compare b a)  (* offset 내림차순 *)
+    |> List.iter (fun (offset, widths) ->
+        let ws = StackShape.IntSet.elements widths
+                |> List.map string_of_int
+                |> String.concat ", " in
+        Format.printf "  [%d] : {%s}@." offset ws)
+  in
+
   let _ = StackShape.pp_stack_shape stack_shape var_set in 
-  
-  (* let oc2 = open_out "stack_shape.json" in
-  StackShape.pp_json stack oc2;
-  close_out oc2;
-  Format.printf "stack shape written to stack_shape.json@."; *)
+
   let oc2 = open_out "stack_shape.json" in
   StackShape.pp_json stack_shape oc2;
   close_out oc2;
 
+  let merged_var_set = StackShape.merge_array_vars var_set merged_chunks in
   let oc = open_out "output.json" in
   StackShape.pp_var_set_json merged_var_set oc;
   close_out oc;
   Format.printf "JSON written to output.json@.";
 
-  (* let oc = open_out "output.json" in 
-  let fmt = Format.formatter_of_out_channel oc in 
-  AbsMemory.pp_grouped_json_with_env fmt filtered_mem reverse_env;
-  Format.pp_print_flush fmt ();
-  close_out oc;
-  Format.printf "JSON written to output.json@."; *)
   ()

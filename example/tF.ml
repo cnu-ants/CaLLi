@@ -459,7 +459,7 @@ let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
         let addr = Env.find name !Env.env in
         let res = abs_eval operand mem in
         (* 디버그 1: operand의 추상값 확인 *)
-        let _ = Format.printf "[DEBUG Load] name=%s, operand res=%a\n" name AbsValue.pp res in
+        (* let _ = Format.printf "[DEBUG Load] name=%s, operand res=%a\n" name AbsValue.pp res in *)
         let res' =
           match res with
           | AbsAddr a ->
@@ -467,13 +467,13 @@ let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
                 (fun a' v -> 
                   let loaded = AbsMemory.find a' mem in
                   (* 디버그 2: 각 주소에서 읽은 값 확인 *)
-                  let _ = Format.printf "[DEBUG Load] addr=%s, loaded=%a, acc=%a\n" 
-                            a' AbsValue.pp loaded AbsValue.pp v in
+                  (* let _ = Format.printf "[DEBUG Load] addr=%s, loaded=%a, acc=%a\n" 
+                            a' AbsValue.pp loaded AbsValue.pp v in *)
                   AbsValue.join v loaded)
                 a AbsValue.bot
               in
               (* 디버그 3: fold 최종 결과 확인 *)
-              let _ = Format.printf "[DEBUG Load] fold result=%a\n" AbsValue.pp result in
+              (* let _ = Format.printf "[DEBUG Load] fold result=%a\n" AbsValue.pp result in *)
               result
           | AbsTop -> AbsValue.top
           | AbsBot -> AbsValue.bot
@@ -539,6 +539,15 @@ let contains_substring s sub =
   in
   aux 0
 
+(* 덩어리(범위) 저장소. (start_offset, end_offset) 리스트.
+   memset/memcpy/loop 탐지가 공통으로 여기에 기록한다. *)
+  let chunks : (int * int) list ref = ref []
+
+  (* 중복 없이 덩어리 하나를 추가 *)
+  let add_chunk (s : int) (e : int) : unit =
+    if not (List.mem (s, e) !chunks) then
+      chunks := (s, e) :: !chunks
+
 (* memset(dst, c, n): dst부터 n바이트를 c로 채운다.
    현재는 "단일 주소 dst, 상수 n, c=0" 케이스만 strong update로 처리.
    그 외에는 failwith로 막아두고, 실제로 마주치면 그때 확장한다.
@@ -586,6 +595,11 @@ let contains_substring s sub =
       | _ -> failwith "model_memset: n is not a constant"
     in
   
+    (* 그 시점의 base(tmp_addr)를 빼서 offset을 만든다. *)
+    let start_offset = base_int - !tmp_addr in
+    let end_offset = start_offset + n_int - 1 in
+    let _ = add_chunk start_offset end_offset in
+
     (* 효과: base부터 4씩, n_int/4칸을 0으로 strong update *)
     let num_slots = n_int / 4 in
     let rec fill mem i =
@@ -597,6 +611,48 @@ let contains_substring s sub =
     in
     fill mem 0
     
+(* memcpy(dst, src, n): dst부터 n바이트를 src에서 복사.
+   지금은 stack shape 목적이라 값 복사는 하지 않고,
+   덩어리 범위만 기록한다. *)
+let model_memcpy (args : Expr.t list) (mem : AbsMemory.t) : AbsMemory.t =
+  (* args = [dst; src; n; isvolatile] *)
+  let dst_e, n_e =
+    match args with
+    | dst :: _src :: n :: _ -> (dst, n)
+    | _ -> failwith "model_memcpy: unexpected number of args"
+  in
+  let dst = abs_eval dst_e mem in
+  let n   = abs_eval n_e mem in
+
+  (* dst가 단일 주소인가 *)
+  let base_int =
+    match dst with
+    | AbsValue.AbsAddr a when AbsValue.AbsAddr.is_singleton a ->
+        (try int_of_string (AbsValue.AbsAddr.min_elt a)
+          with _ -> failwith "model_memcpy: dst address is not numeric")
+    | _ -> failwith "model_memcpy: dst is not a single address"
+  in
+
+  (* n이 상수인가 *)
+  let n_int =
+    match n with
+    | AbsValue.AbsInt (AbsInterval.IntInterval {min; max})
+      when AbsInterval.Elt.(min == max) ->
+        (match min with
+          | AbsInterval.I z -> Z.to_int z
+          | _ -> failwith "model_memcpy: n is infinite")
+    | _ -> failwith "model_memcpy: n is not a constant"
+  in
+
+  (* 덩어리 기록 *)
+  let start_offset = base_int - !tmp_addr in
+  let end_offset = start_offset + n_int - 1 in
+  let _ = add_chunk start_offset end_offset in
+
+  (* 메모리는 건드리지 않고 그대로 반환 *)
+  mem
+
+
 let abs_interp_term' (term : Term.t) (mem : AbsMemory.t) =
     if mem = AbsMemory.bot then mem else
     match term with
@@ -610,6 +666,7 @@ let abs_interp_term' (term : Term.t) (mem : AbsMemory.t) =
     (* | CallSite _ -> mem *)
     | CallSite {callee; args; _} ->
       if contains_substring callee "memset" then model_memset args mem
+      else if contains_substring callee "memcpy" then model_memcpy args mem
       else mem
     | Switch _ -> mem
     | _ -> mem

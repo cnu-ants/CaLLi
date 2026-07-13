@@ -20,11 +20,23 @@ type stack_entry =
   | Variable
   | Chunk of chunk_kind
 
+(* struct 필드의 종류 *)
+type field_kind = FieldVar | FieldArray | FieldUnknown
+
+(* struct chunk 내부의 필드 하나 *)
+type struct_field = {
+  fstart : int;          (* 필드 시작 offset *)
+  fend : int;             (* 필드 끝 offset (포함) *)
+  fkind : field_kind;
+  fwidth : int option;    (* var: 필드 크기 / array: 원소 폭. unknown이면 None *)
+}
+
 (* 스택의 특정 슬롯 *)
 type stack_slot = {
   start_offset : int;  (* 슬롯 시작 오프셋 (낮은 주소) *)
   end_offset : int;    (* 슬롯 끝 오프셋 (높은 주소) *)
   entry : stack_entry;
+  fields : struct_field list; (* StructKind가 아니면 항상 [] *)
 }
 
 (* 변수 집합: 주소값 문자열 (ex: "99952") -> 변수 이름 리스트 *)
@@ -409,53 +421,145 @@ let determine_chunk_kind
     | _ -> StructKind
   end
 
+(* [chosen_width_at offset offset_types array_widths]
+  해당 offset에서 신뢰할 폭 하나를 고른다.
+  array_widths(indexed 접근 근거)를 우선하고, 없으면 offset_types에서
+  가장 작은 폭(초기화 등으로 섞인 넓은 잡음 폭보다 세밀한 접근을 신뢰)을 쓴다. *)
+let chosen_width_at offset offset_types array_widths : int option =
+  match Hashtbl.find_opt array_widths offset with
+  | Some ws when IntSet.cardinal ws >= 1 -> Some (IntSet.min_elt ws)
+  | _ ->
+    (match Hashtbl.find_opt offset_types offset with
+      | Some ws when IntSet.cardinal ws >= 1 -> Some (IntSet.min_elt ws)
+      | _ -> None)
+  
+
+
+(* [split_struct_fields (s, e) offset_types array_widths]
+   StructKind로 판정된 chunk [s, e]를, 연속된 같은 폭 구간(run) 단위로
+   var/array/unknown 필드로 쪼갠다.
+   - run 안에 같은 폭 원소가 2개 이상 반복되면 배열 필드(FieldArray)
+   - 원소가 사실상 1개뿐이면(나머지 바이트가 안 맞아떨어져도) 배열이 아니라
+     그 폭의 스칼라 변수(FieldVar)로 취급한다. 남는 바이트는 별도 unknown으로 분리.
+   - 폭 정보가 없는 구간 -> FieldUnknown (padding 등) *)
+let split_struct_fields
+   ((s, e) : int * int)
+   (offset_types : (int, IntSet.t) Hashtbl.t)
+   (array_widths : (int, IntSet.t) Hashtbl.t)
+   : struct_field list =
+
+ let n = e - s + 1 in
+ let widths = Array.make n None in
+ for i = 0 to n - 1 do
+   widths.(i) <- chosen_width_at (s + i) offset_types array_widths
+ done;
+
+ (* store는 시작 주소 한 지점에만 폭이 기록되므로,
+    그 폭만큼 뒤 칸이 비어있으면 같은 값으로 채운다 (이미 채워진 자리는 유지) *)
+ for i = 0 to n - 1 do
+   match widths.(i) with
+   | Some w when w > 1 ->
+     for k = 1 to w - 1 do
+       if i + k < n && widths.(i + k) = None then
+         widths.(i + k) <- Some w
+     done
+   | _ -> ()
+ done;
+
+ let runs = ref [] in
+ let i = ref 0 in
+ while !i < n do
+   (match widths.(!i) with
+    | None ->
+      let j = ref !i in
+      while !j < n && widths.(!j) = None do incr j done;
+      runs := (s + !i, s + !j - 1, None) :: !runs;
+      i := !j
+    | Some w ->
+      let j = ref !i in
+      while !j < n && widths.(!j) = Some w do incr j done;
+      runs := (s + !i, s + !j - 1, Some w) :: !runs;
+      i := !j)
+ done;
+ let runs = List.rev !runs in
+
+ (* run 하나를 최종 필드(들)로 변환.
+    원소가 2개 이상 반복되는 경우만 진짜 배열로 인정하고,
+    count<=1이면 스칼라 변수로 되돌린다 (나머지는 unknown으로 분리). *)
+ let finalize_run (rs, re, w) : struct_field list =
+   match w with
+   | None -> [{ fstart = rs; fend = re; fkind = FieldUnknown; fwidth = None }]
+   | Some w ->
+     let len = re - rs + 1 in
+     let count = len / w in
+     if count <= 1 then
+       let var_end = min re (rs + w - 1) in
+       if var_end >= re then
+         [{ fstart = rs; fend = re; fkind = FieldVar; fwidth = Some w }]
+       else
+         [{ fstart = rs; fend = var_end; fkind = FieldVar; fwidth = Some w };
+          { fstart = var_end + 1; fend = re; fkind = FieldUnknown; fwidth = None }]
+     else
+       [{ fstart = rs; fend = re; fkind = FieldArray; fwidth = Some w }]
+ in
+
+ List.concat_map finalize_run runs
+
+
 (* [build_stack_shape var_set chunks offset_types array_widths]
    var_set과 chunks(병합된 덩어리 범위)로부터 전체 stack_slot 리스트를 구성한다.
    - chunks 범위는 determine_chunk_kind로 kind를 판정해 Chunk 슬롯으로.
+     StructKind로 판정된 chunk는 split_struct_fields로 내부 필드도 함께 채운다.
    - chunks 어디에도 속하지 않는 var_set 변수는 Variable 슬롯으로.
    결과는 start_offset 내림차순(스택 위쪽 -> 아래쪽)으로 정렬해 반환한다. *)
 let build_stack_shape
-    (var_set : var_set)
-    (chunks : (int * int) list)
-    (offset_types : (int, IntSet.t) Hashtbl.t)
-    (array_widths : (int, IntSet.t) Hashtbl.t)
-    : stack_slot list =
+   (var_set : var_set)
+   (chunks : (int * int) list)
+   (offset_types : (int, IntSet.t) Hashtbl.t)
+   (array_widths : (int, IntSet.t) Hashtbl.t)
+   : stack_slot list =
 
-  let in_any_chunk offset =
-    List.exists (fun (s, e) -> s <= offset && offset <= e) chunks
-  in
+ let in_any_chunk offset =
+   List.exists (fun (s, e) -> s <= offset && offset <= e) chunks
+ in
 
-  (* 1) chunk들을 판정된 kind로 Chunk 슬롯으로 *)
-  let chunk_slots =
-    List.map (fun (s, e) ->
-      let kind = determine_chunk_kind (s, e) offset_types array_widths in
-      { start_offset = s; end_offset = e; entry = Chunk kind }
-    ) chunks
-  in
+ (* 1) chunk들을 판정된 kind로 Chunk 슬롯으로. StructKind면 필드도 채운다 *)
+ let chunk_slots =
+   List.map (fun (s, e) ->
+     let kind = determine_chunk_kind (s, e) offset_types array_widths in
+     let fields =
+       if kind = StructKind then split_struct_fields (s, e) offset_types array_widths
+       else []
+     in
+     { start_offset = s; end_offset = e; entry = Chunk kind; fields }
+   ) chunks
+ in
 
-  (* 2) 어떤 chunk에도 속하지 않는 var_set 변수만 Variable 슬롯으로 *)
-  let var_slots =
-    List.filter_map (fun (addr_str, _) ->
-      match addr_to_offset addr_str with
-      | None -> None
-      | Some offset ->
-        if in_any_chunk offset then None
-        else
-          Some { start_offset = offset;
-                 end_offset = offset + 4;
-                 entry = Variable }
-    ) var_set
-  in
+ (* 2) 어떤 chunk에도 속하지 않는 var_set 변수만 Variable 슬롯으로 *)
+ let var_slots =
+   List.filter_map (fun (addr_str, _) ->
+     match addr_to_offset addr_str with
+     | None -> None
+     | Some offset ->
+       if in_any_chunk offset then None
+       else
+         Some { start_offset = offset;
+                end_offset = offset + 4;
+                entry = Variable;
+                fields = [] }
+   ) var_set
+ in
 
-  List.sort (fun a b -> compare b.start_offset a.start_offset)
-    (chunk_slots @ var_slots)
+ List.sort (fun a b -> compare b.start_offset a.start_offset)
+   (chunk_slots @ var_slots)
 
 
 (* ===== 출력 함수들 ===== *)
 
 (* [pp_stack_shape slots var_set]
    스택 슬롯 목록을 사람이 읽기 좋은 형태로 출력한다.
-   Variable은 "[end ~ start] : #x주소", Chunk는 종류(kind)를 함께 표시한다. *)
+   Variable은 "[end ~ start] : #x주소", Chunk는 종류(kind)를 함께 표시하며,
+   StructKind인 경우 내부 필드(var/array/unknown)도 들여써서 출력한다. *)
 let pp_stack_shape (slots : stack_slot list) (_var_set : var_set) =
   Format.printf "=== Virtual Stack Shape ===@.";
   List.iter (fun slot ->
@@ -470,17 +574,37 @@ let pp_stack_shape (slots : stack_slot list) (_var_set : var_set) =
         | ArrayKind -> "array"
         | StructKind -> "struct"
       in
+      (* chunk의 end_offset은 내부적으로 inclusive이므로,
+          variables와 표기를 통일하기 위해 출력 시에만 +1(exclusive)로 보여준다 *)
       Format.printf "  [%d ~ %d] : %s (%s)@."
-        slot.end_offset slot.start_offset kind_str offset_str
+        (slot.end_offset + 1) slot.start_offset kind_str offset_str;
+      let var_n = ref 0 and arr_n = ref 0 and unk_n = ref 0 in
+      List.iter (fun f ->
+        match f.fkind with
+        | FieldVar ->
+          incr var_n;
+          Format.printf "      var%d   : [%d ~ %d] width=%d@."
+            !var_n (f.fend + 1) f.fstart (Option.value f.fwidth ~default:0)
+        | FieldArray ->
+          incr arr_n;
+          let w = Option.value f.fwidth ~default:1 in
+          let count = (f.fend - f.fstart + 1) / w in
+          Format.printf "      array%d : [%d ~ %d] element_width=%d count=%d@."
+            !arr_n (f.fend + 1) f.fstart w count
+        | FieldUnknown ->
+          incr unk_n;
+          Format.printf "      unknown%d : [%d ~ %d]@."
+            !unk_n (f.fend + 1) f.fstart
+      ) slot.fields
   ) slots
-
+ 
 (* [pp_json slots oc]
    스택 슬롯 목록을 "variables" / "arrays" / "structs" / "unknown"
-   네 키로 분리해 JSON 형태로 out_channel에 출력한다. *)
+   네 키로 분리해 JSON 형태로 out_channel에 출력한다.
+   structs 항목에는 내부 필드(var/array/unknown)를 "fields" 배열로 함께 담는다. *)
 let pp_json (slots : stack_slot list) (oc : out_channel) =
   let fmt = Format.formatter_of_out_channel oc in
 
-  (* kind별로 chunk 슬롯 분류 *)
   let variables = List.filter (fun s -> s.entry = Variable) slots in
   let chunks_of kind =
     List.filter (fun s ->
@@ -491,27 +615,71 @@ let pp_json (slots : stack_slot list) (oc : out_channel) =
   let structs = chunks_of StructKind in
   let unknown = chunks_of Unknown in
 
-  let print_list ~last key items =
+  (* struct 필드 하나를 JSON 오브젝트 문자열로 변환.
+      fend는 내부적으로 inclusive이므로 +1 해서 exclusive로 출력한다. *)
+  let field_to_json var_n arr_n unk_n f =
+    match f.fkind with
+    | FieldVar ->
+      incr var_n;
+      Printf.sprintf
+        "{\"name\": \"var%d\", \"kind\": \"var\", \"offset\": \"%s\", \"start\": %d, \"end\": %d, \"width\": %d}"
+        !var_n (offset_to_hex f.fstart) f.fstart (f.fend + 1) (Option.value f.fwidth ~default:0)
+    | FieldArray ->
+      incr arr_n;
+      let w = Option.value f.fwidth ~default:1 in
+      let count = (f.fend - f.fstart + 1) / w in
+      Printf.sprintf
+        "{\"name\": \"array%d\", \"kind\": \"array\", \"offset\": \"%s\", \"start\": %d, \"end\": %d, \"element_width\": %d, \"count\": %d}"
+        !arr_n (offset_to_hex f.fstart) f.fstart (f.fend + 1) w count
+    | FieldUnknown ->
+      incr unk_n;
+      Printf.sprintf
+        "{\"name\": \"unknown%d\", \"kind\": \"unknown\", \"offset\": \"%s\", \"start\": %d, \"end\": %d}"
+        !unk_n (offset_to_hex f.fstart) f.fstart (f.fend + 1)
+  in
+
+  let print_fields fields =
+    let visible = List.filter (fun f -> f.fkind <> FieldUnknown) fields in
+    let var_n = ref 0 and arr_n = ref 0 and unk_n = ref 0 in
+    let n = List.length visible in
+    Format.fprintf fmt "      \"fields\": [@\n";
+    List.iteri (fun i f ->
+      Format.fprintf fmt "        %s" (field_to_json var_n arr_n unk_n f);
+      if i < n - 1 then Format.fprintf fmt ",";
+      Format.fprintf fmt "@\n"
+    ) visible;
+    Format.fprintf fmt "      ]@\n"
+  in
+
+  let print_list ~last ~with_fields key items =
     Format.fprintf fmt "  \"%s\": [@\n" key;
     let n = List.length items in
     List.iteri (fun i slot ->
-      Format.fprintf fmt "    {\"offset\": \"%s\", \"start\": %d, \"end\": %d}"
+      (* Variable은 이미 exclusive(offset+4), Chunk는 inclusive이므로 +1 보정 *)
+      let display_end = match slot.entry with
+        | Variable -> slot.end_offset
+        | Chunk _ -> slot.end_offset + 1
+      in
+      Format.fprintf fmt "    {@\n";
+      Format.fprintf fmt "      \"offset\": \"%s\", \"start\": %d, \"end\": %d%s@\n"
         (offset_to_hex slot.start_offset)
         slot.start_offset
-        slot.end_offset;
+        display_end
+        (if with_fields then "," else "");
+      if with_fields then print_fields slot.fields;
+      Format.fprintf fmt "    }";
       if i < n - 1 then Format.fprintf fmt ",";
       Format.fprintf fmt "@\n"
     ) items;
-    (* 마지막 리스트가 아니면 뒤에 콤마 *)
     if last then Format.fprintf fmt "  ]@\n"
     else Format.fprintf fmt "  ],@\n"
   in
 
   Format.fprintf fmt "{@\n";
-  print_list ~last:false "variables" variables;
-  print_list ~last:false "arrays" arrays;
-  print_list ~last:false "structs" structs;
-  print_list ~last:true  "unknown" unknown;
+  print_list ~last:false ~with_fields:false "variables" variables;
+  print_list ~last:false ~with_fields:false "arrays" arrays;
+  print_list ~last:false ~with_fields:true  "structs" structs;
+  print_list ~last:true  ~with_fields:false "unknown" unknown;
   Format.fprintf fmt "}@\n";
   Format.pp_print_flush fmt ()
 
