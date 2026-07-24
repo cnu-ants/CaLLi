@@ -35,6 +35,13 @@
     | Some (f) -> f
     | None -> failwith "No target function exists"
 
+  let find_opt s m = 
+    M.fold (fun _ v t -> 
+      let f : Function.t = v in
+      if String.starts_with ~prefix:s f.function_name 
+        then Some (v) 
+        else t
+    ) m None
 
   let next (bb_name : String.t) m : Basicblock.t list = 
     let bb = Bbpool.find_bb bb_name in

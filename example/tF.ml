@@ -539,6 +539,13 @@ let contains_substring s sub =
   in
   aux 0
 
+(* memset/memcpy처럼 바이트 단위 일괄 접근으로 생긴 범위를 별도로 기록.
+   폭 정보의 최하위 우선순위 fallback으로만 쓰인다. *)
+  let bulk_ranges : (int * int) list ref = ref []
+
+  let add_bulk_range s e =
+    bulk_ranges := (s, e) :: !bulk_ranges
+
 (* 덩어리(범위) 저장소. (start_offset, end_offset) 리스트.
    memset/memcpy/loop 탐지가 공통으로 여기에 기록한다. *)
   let chunks : (int * int) list ref = ref []
@@ -599,6 +606,7 @@ let contains_substring s sub =
     let start_offset = base_int - !tmp_addr in
     let end_offset = start_offset + n_int - 1 in
     let _ = add_chunk start_offset end_offset in
+    let _ = add_bulk_range start_offset end_offset in
 
     (* 효과: base부터 4씩, n_int/4칸을 0으로 strong update *)
     let num_slots = n_int / 4 in
@@ -648,6 +656,7 @@ let model_memcpy (args : Expr.t list) (mem : AbsMemory.t) : AbsMemory.t =
   let start_offset = base_int - !tmp_addr in
   let end_offset = start_offset + n_int - 1 in
   let _ = add_chunk start_offset end_offset in
+  let _ = add_bulk_range start_offset end_offset in
 
   (* 메모리는 건드리지 않고 그대로 반환 *)
   mem
@@ -710,6 +719,7 @@ let seed_entry_defs_bot (f : Function.t) (mem : AbsMemory.t) : AbsMemory.t =
     loop mem 1
 
 let transfer (bb : Basicblock.t) (mem : AbsMemory.t)  =
+    let _ = Format.printf "BB NAME!!: %s@." bb.bb_name in
     let mem' = List.fold_left
     (fun mem stmt ->
         let mem'' = abs_interp_stmt stmt mem in

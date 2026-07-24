@@ -10,6 +10,15 @@ module Make (AbsMem : AbstractMemory.S ) ( Ctxt : Context.S with type memty = Ab
     let iter = M.iter
     let fold = M.fold
     
+    let pp _ icfg = 
+      M.iter
+      (fun k v ->
+        let _ = Format.printf "%s -> " k in
+        let _ = List.iter (fun s -> Format.printf "%s ," s) v in
+        Format.printf "\n"
+      )
+      icfg
+
     let make (m : Function.t Module.M.t) : t =
       let icfg = Module.fold 
       (fun _ (func : Function.t) icfg ->
@@ -37,6 +46,13 @@ module Make (AbsMem : AbstractMemory.S ) ( Ctxt : Context.S with type memty = Ab
         icfg icfg 
       in
       icfg
+
+    let preds (bb : Basicblock.t) icfg _ : Basicblock.t list =
+      M.fold
+        (fun from succs acc ->
+          if List.exists (fun s -> String.equal s bb.bb_name) succs then (Bbpool.find from !Bbpool.pool) :: acc
+          else acc)
+        icfg []
 
     let preds_intra (bb : Basicblock.t) _ m : Basicblock.t list = 
       let f = Module.find bb.func_name m in
@@ -85,12 +101,4 @@ module Make (AbsMem : AbstractMemory.S ) ( Ctxt : Context.S with type memty = Ab
         (fun v -> (v, ctxt))
         fallbacks
 
-    let pp _ icfg = 
-      M.iter
-      (fun k v ->
-        let _ = Format.printf "%s -> " k in
-        let _ = List.iter (fun s -> Format.printf "%s ," s) v in
-        Format.printf "\n"
-      )
-      icfg
   end

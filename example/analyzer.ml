@@ -125,7 +125,7 @@ let _ =
   (* let _ = Format.printf "--CFG--\n %a@." Cfg.pp target_f.cfg in *)
   let module Dot = To_dot.Make(States2) in
   let _ = Dot.func_to_dot target_f in
-
+  
   (* Set Analzyer*)
   let init_mem = Analyzer2.init (Init.m ())  in
   let init_mem = TF2.seed_entry_defs_bot target_f init_mem in
@@ -145,9 +145,9 @@ let _ =
   let b_state = !Analyzer2.summary2 in
   let _ = Format.printf "B STATE %a\n" States2.pp b_state in
   let _ = AbsInterval.global_b := build_threshold_map b_state in
-  (* let _ = Format.printf "\n--------------------global b\n" in
+  let _ = Format.printf "\n--------------------global b\n" in
   let _ = AbsInterval.pp_global_b () in
-  let _ = Format.printf "\n--------------------\n" in *)
+  let _ = Format.printf "\n--------------------\n" in
   (* let _ = Format.printf "%a\n" States2.pp s2 in *)
   
   (* let init_mem = Analyzer.init (Init.m ())  in
@@ -208,20 +208,11 @@ let _ =
   let _ = List.iter (fun (s, e) ->
     Format.printf "  [%d ~ %d]@." s e) merged_chunks in
 
-  (* offset -> 폭 집합 매핑 수집 후 출력으로 확인 *)
   let offset_types = StackShape.collect_offset_types target_f s1_exit_mem in
   let array_widths = StackShape.collect_array_widths target_f var_set s1_exit_mem in
+  let () = StackShape.fill_bulk_widths !TF.bulk_ranges offset_types array_widths in
+  let merged_chunks = StackShape.extend_array_chunk_ends merged_chunks array_widths in
   let stack_shape = StackShape.build_stack_shape var_set merged_chunks offset_types array_widths in
-  let _ = Format.printf "=== Offset Types ===@." in
-  let _ = 
-    Hashtbl.fold (fun offset widths acc -> (offset, widths) :: acc) offset_types []
-    |> List.sort (fun (a, _) (b, _) -> compare b a)  (* offset 내림차순 *)
-    |> List.iter (fun (offset, widths) ->
-        let ws = StackShape.IntSet.elements widths
-                |> List.map string_of_int
-                |> String.concat ", " in
-        Format.printf "  [%d] : {%s}@." offset ws)
-  in
 
   let _ = StackShape.pp_stack_shape stack_shape var_set in 
 
