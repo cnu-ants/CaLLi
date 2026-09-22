@@ -243,6 +243,8 @@ let analyze entry states =
       let preds : Basicblock.t list = Icfg.preds_intra bb !icfg !llmodule in
       let init_mem = States.find_mem (entry, ctxt) states in 
       let mem : AbsMem.t = 
+        if preds = [] then init_mem
+        else
         List.fold_left
         (fun mem pred_bb -> 
           match States.find_mem_option (pred_bb, ctxt) states with
@@ -250,8 +252,8 @@ let analyze entry states =
             AbsMem.(join m mem)
           | None -> mem
         )
-        (*AbsMem.empty preds in*)
-        init_mem preds in
+        AbsMem.empty preds in
+        (* init_mem preds in *)
       let mem = if bb != entry && mem = AbsMem.empty then AbsMem.bot else mem in 
       let _ = summary := States.update (bb, ctxt) mem !summary in
       (* calc memory and context*)
@@ -261,7 +263,7 @@ let analyze entry states =
       let wl', states' = 
         List.fold_left
         (fun (w, s) ((succ : Basicblock.t), ctxt) -> 
-          (*let _ = Format.printf "-----------s----------\n BBName %s@." bb.bb_name in*)
+          (* let _ = Format.printf "-----------s----------\n BBName %s@." bb.bb_name in *)
           let prev_mem = States.find_mem_option (bb, ctxt) states in
           match prev_mem with
           | Some prev_mem -> 

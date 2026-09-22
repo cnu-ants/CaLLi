@@ -21,7 +21,7 @@ let obj_addr_of_name (name : string) : string =
   name ^ "#obj"
 
 let ret_addr : string =
-  "ret"
+  "#ret"
 
 let set_constraint_cond (cond:Cond.t)  (value:AbsValue.t) (v:AbsValue.t) : AbsValue.t = 
     match cond with
@@ -385,22 +385,15 @@ let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
       | Load {name; operand; _} ->
         let addr = Env.find name !Env.env in
         let res = abs_eval operand mem in
-        (* 디버그 1: operand의 추상값 확인 *)
-        let _ = Format.printf "[DEBUG Load] name=%s, operand res=%a\n" name AbsValue.pp res in
         let res' =
           match res with
           | AbsAddr a ->
               let result = AbsValue.AbsAddr.fold
                 (fun a' v -> 
                   let loaded = AbsMemory.find a' mem in
-                  (* 디버그 2: 각 주소에서 읽은 값 확인 *)
-                  let _ = Format.printf "[DEBUG Load] addr=%s, loaded=%a, acc=%a\n" 
-                            a' AbsValue.pp loaded AbsValue.pp v in
                   AbsValue.join v loaded)
                 a AbsValue.bot
               in
-              (* 디버그 3: fold 최종 결과 확인 *)
-              let _ = Format.printf "[DEBUG Load] fold result=%a\n" AbsValue.pp result in
               result
           | AbsTop -> AbsValue.top
           | AbsBot -> AbsValue.bot
@@ -429,7 +422,7 @@ let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
       mem''
 
     | ReturnSite {name; ty} ->
-      let res = abs_eval (Expr.Name {ty=ty; name="ret"}) mem in
+      let res = abs_eval (Expr.Name {ty=ty; name=ret_addr}) mem in
       let addr = Env.find name !Env.env in
       AbsMemory.update addr res mem
 
@@ -463,7 +456,7 @@ let abs_interp_term' (term : Term.t) (mem : AbsMemory.t) =
     | CondBr _ -> mem
     | Ret {ret; _} ->
       let res = abs_eval ret mem in
-      let addr = Env.find "ret" !Env.env in
+      let addr = Env.find ret_addr !Env.env in
       AbsMemory.update addr res mem
     | Exit _ -> mem
     | CallSite _ -> mem
@@ -494,7 +487,7 @@ let seed_entry_defs_bot (f : Function.t) (mem : AbsMemory.t) : AbsMemory.t =
       mem
       f.vars
   in
-  let _ = Env.env := Env.add "ret" ret_addr !Env.env in
+  let _ = Env.env := Env.add "#ret" ret_addr !Env.env in
   AbsMemory.update ret_addr AbsValue.bot mem
 
 let seed_argv_addrs (mem : AbsMemory.t) : AbsMemory.t =

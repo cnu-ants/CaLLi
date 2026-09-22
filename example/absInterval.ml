@@ -136,12 +136,22 @@ let (==) a b = compare a b = 0
     elts
 
 
-  let next_pow (e : elt) : elt = 
+  (* let next_pow (e : elt) : elt = 
     let res = ref zero in
     while !res <= e do 
       res := !res * I (Z.of_int 2)
     done;
-    !res 
+    !res  *)
+  let next_pow (e : elt) : elt =
+    match e with 
+    | MinInf -> one 
+    | MaxInf -> MaxInf 
+    | I _ -> 
+      let res = ref one in 
+      while !res < e do 
+        res := !res * I (Z.of_int 2)
+      done;
+      !res
 
 end
 
@@ -170,6 +180,19 @@ let meet n1 n2 =
   | IntInterval {min=min0; max=max0}, IntInterval {min=min1; max=max1} ->
     IntInterval {min=Elt.max_elt [min0; min1]; max=Elt.min_elt [max0; max1]}
 
+let singleton_value (n : t) : Z.t option =
+  match n with
+  | IntInterval { min = I a; max = I b } when Z.equal a b -> Some a
+  | _ -> None
+
+let is_nonneg_lb (e: elt) : bool =
+  match e with 
+  | I i -> Z.geq i Z.zero 
+  | MinInf -> false 
+  | MaxInf -> true 
+
+let is_finite_elt (e: elt) : bool =
+  match e with I _ -> true | MinInf | MaxInf -> false 
 
 module BinOp = struct
 
@@ -295,7 +318,7 @@ module BinOp = struct
         Elt.(max0 >> min1); Elt.(max0 >> max1)] in
         IntInterval {min=Elt.min_elt m; max=Elt.max_elt m}
 
-  let logor n1 n2 =
+  (* let logor n1 n2 =
   match n1, n2 with
   | IntBot, _ | _, IntBot -> IntBot
   | IntInterval { min = min0; max = max0 }, IntInterval { min = min1; max = max1 } ->
@@ -306,8 +329,61 @@ module BinOp = struct
            where k = ceil_log2(max(max0, max1) + 1). *)
         let hi = Elt.max_elt [ max0; max1 ] in
         let ub = Elt.(Elt.next_pow(Elt.(hi + Elt.one)) - Elt.one) in
-        IntInterval { min = Elt.zero; max = ub }
+        IntInterval { min = Elt.zero; max = ub } *)
+  let logor n1 n2 =
+    match n1, n2 with
+    | IntBot, _ | _, IntBot -> IntBot
+    | IntInterval { min = min0; max = max0 },
+      IntInterval { min = min1; max = max1 } ->
+      (match singleton_value n1, singleton_value n2 with
+        | Some a, Some b -> alpha (Z.logor a b)
+        | Some a, _ when Z.equal a Z.minus_one -> alpha Z.minus_one
+        | _, Some b when Z.equal b Z.minus_one -> alpha Z.minus_one
+        | Some a, _ when Z.equal a Z.zero -> n2
+        | _, Some b when Z.equal b Z.zero -> n1
+        | _ ->
+          if is_nonneg_lb min0 && is_finite_elt max0
+            && is_nonneg_lb min1 && is_finite_elt max1 then
+            let hi = Elt.max_elt [ max0; max1 ] in
+            IntInterval { min = Elt.zero;
+                          max = Elt.(next_pow (hi + one) - one) }
+          else top)
 
+  let logxor n1 n2 =
+    match n1, n2 with
+    | IntBot, _ | _, IntBot -> IntBot
+    | IntInterval { min = min0; max = max0 },
+      IntInterval { min = min1; max = max1 } ->
+      (match singleton_value n1, singleton_value n2 with
+        | Some a, Some b -> alpha (Z.logxor a b)
+        | Some a, _ when Z.equal a Z.zero -> n2
+        | _, Some b when Z.equal b Z.zero -> n1
+        | _ ->
+          if is_nonneg_lb min0 && is_finite_elt max0
+            && is_nonneg_lb min1 && is_finite_elt max1 then
+            let hi = Elt.max_elt [ max0; max1 ] in
+            IntInterval { min = Elt.zero;
+                          max = Elt.(next_pow (hi + one) - one) }
+          else top)
+
+  let logand n1 n2 = 
+    match n1, n2 with 
+    | IntBot, _ | _, IntBot -> IntBot
+    | IntInterval {min = min0; max = max0}, IntInterval {min = min1; max = max1} ->
+      (match singleton_value n1, singleton_value n2 with
+      | Some a, Some b -> alpha (Z.logand a b)
+      | Some a, _ when Z.equal a Z.zero -> alpha Z.zero
+      | _, Some b when Z.equal b Z.zero -> alpha Z.zero
+      | Some a, _ when Z.equal a Z.minus_one -> n2
+      | _, Some b when Z.equal b Z.minus_one -> n1
+      | _ ->
+        if is_nonneg_lb min0 && is_nonneg_lb min1 then 
+          IntInterval {min = Elt.zero; max = Elt.min_elt [max0; max1]}
+        else if is_nonneg_lb min0 then 
+          IntInterval {min = Elt.zero; max = max0}
+        else if is_nonneg_lb min1 then
+          IntInterval {min = Elt.zero; max = max1}
+        else top) 
 
 end
 
@@ -451,6 +527,61 @@ let app_sgt n1 n2 =
   in 
   res
 
+  let all_nonneg (n : t) : bool =
+    match n with
+    | IntBot -> true
+    | IntInterval { min = I z; _ } -> Z.geq z Z.zero
+    | IntInterval { min = MinInf; _ } -> false
+    | IntInterval { min = MaxInf; _ } -> true
+  
+  let all_neg (n : t) : bool =
+    match n with
+    | IntBot -> true
+    | IntInterval { max = I z; _ } -> Z.lt z Z.zero
+    | IntInterval { max = MaxInf; _ } -> false
+    | IntInterval { max = MinInf; _ } -> true
+  
+  (* x >u y 로 x(n1)를 좁힌다 *)
+  let app_ugt n1 n2 =
+    match n1, n2 with
+    | IntBot, _ | _, IntBot -> IntBot
+    | _ ->
+        if (all_nonneg n1 && all_nonneg n2) || (all_neg n1 && all_neg n2) then
+          app_sgt n1 n2                      (* 같은 반쪽: 순서 보존 *)
+        else if all_neg n1 && all_nonneg n2 then n1        (* 항상 참 *)
+        else if all_nonneg n1 && all_neg n2 then IntBot    (* 항상 거짓 — 이건 정당한 bot *)
+        else n1                                            (* 부호 걸침: 포기 *)
+  
+  let app_uge n1 n2 =
+    match n1, n2 with
+    | IntBot, _ | _, IntBot -> IntBot
+    | _ ->
+        if (all_nonneg n1 && all_nonneg n2) || (all_neg n1 && all_neg n2) then app_sge n1 n2
+        else if all_neg n1 && all_nonneg n2 then n1
+        else if all_nonneg n1 && all_neg n2 then IntBot
+        else n1
+  
+  (* x <u y : y가 non-negative면 n1의 부호와 무관하게 [0, min(y)-1]로 확정 *)
+  let app_ult n1 n2 =
+    match n1, n2 with
+    | IntBot, _ | _, IntBot -> IntBot
+    | _, IntInterval { min = m2; _ } when all_nonneg n2 ->
+        meet n1 (mk_interval Elt.zero (elt_pred m2))
+    | _ -> if all_neg n1 && all_neg n2 then app_slt n1 n2 else n1
+  
+  let app_ule n1 n2 =
+    let _ = Format.printf "  [AbsInterval.app_ule] %a %a\n" pp n1 pp n2 in
+    let res =
+    match n1, n2 with
+    | IntBot, _ | _, IntBot -> IntBot
+    | _, IntInterval { min = m2; _ } when all_nonneg n2 ->
+        meet n1 (mk_interval Elt.zero m2)
+    | _ -> if all_neg n1 && all_neg n2 then app_sle n1 n2 else n1
+    in
+    let _ = Format.printf "  [AbsInterval.app_ule] %a %a -> %a\n" pp n1 pp n2 pp res in
+    res
+
+
 (* original *)
 (* let widen n1 n2 =
   match n1, n2 with
@@ -484,7 +615,7 @@ let get_min_in_B b n =
 let get_max_in_B b n =
   try
     EltSet.fold (fun t acc ->
-      if Elt.(t > n) && Elt.(t < acc) then t else acc 
+      if Elt.(t >= n) && Elt.(t < acc) then t else acc 
     ) b MaxInf
   with _ -> MaxInf
 
@@ -523,7 +654,7 @@ let widen key n1 n2 =
   MaxInf
   ] in *)
   let b = match EltSetMap.find_opt key !global_b with
-  | Some s -> s 
+  | Some s -> s
   | None -> EltSet.of_list [MinInf; MaxInf]
   in
   widening_with_B n1 n2 b

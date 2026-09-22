@@ -11,6 +11,7 @@ let _ =
   let _ = Init.transform_prune () in
   let _ = Init.make_llm () in
   let _ = Init.make_call_graph () in 
+  let _ = CallGraph.pp_simple Format.std_formatter (Init.call_graph ()) in
   ()
 
 
@@ -54,8 +55,37 @@ end)
 
 module S = Set.Make(String)
 
+(* threshold 외삽 단계: (개수, diff 배율).
+앞 단계가 끝난 지점에서 이어서 진행한다.
+가까운 구간은 촘촘하게, 먼 구간은 성기게 깔아
+같은 개수로 더 넓은 범위를 덮는다. *)
+let extend_phases = [ (30, 1); (10, 2); (10, 5) ]
 
-let expand_intset (s: AbsIntSet.S.t) : AbsInterval.EltSet.t = 
+let expand_intset (s: AbsIntSet.S.t) : AbsInterval.EltSet.t =
+  let base = AbsIntSet.S.fold
+    (fun z acc -> AbsInterval.EltSet.add (AbsInterval.I z) acc)
+    s AbsInterval.EltSet.empty in
+  let base = AbsInterval.EltSet.add AbsInterval.MinInf base in
+  let base = AbsInterval.EltSet.add AbsInterval.MaxInf base in
+  let elts = List.of_seq (AbsIntSet.S.to_seq s) in
+  match elts with
+  | a :: b :: _ ->
+    let diff = Z.sub b a in
+    if Z.gt diff Z.zero then
+      let cur = ref (AbsIntSet.S.max_elt s) in
+      let acc = ref base in
+      List.iter (fun (count, mult) ->
+        let step = Z.mul diff (Z.of_int mult) in
+        for _ = 1 to count do
+          cur := Z.add !cur step;
+          acc := AbsInterval.EltSet.add (AbsInterval.I !cur) !acc
+        done
+      ) extend_phases;
+      !acc
+    else base
+  | _ -> base
+
+(* let expand_intset (s: AbsIntSet.S.t) : AbsInterval.EltSet.t = 
   let base = AbsIntSet.S.fold
   (fun z acc -> AbsInterval.EltSet.add (AbsInterval.I z) acc)
   s AbsInterval.EltSet.empty in 
@@ -68,14 +98,14 @@ let expand_intset (s: AbsIntSet.S.t) : AbsInterval.EltSet.t =
     if Z.gt diff Z.zero then 
       let last = AbsIntSet.S.max_elt s in 
       let rec extend i acc = 
-        if i > 10 then acc 
+        if i > 50 then acc 
         else
           let next = AbsInterval.I (Z.add last (Z.mul diff (Z.of_int i))) in 
           extend (i + 1) (AbsInterval.EltSet.add next acc)
       in
       extend 1 base
     else base
-  | _ -> base
+  | _ -> base *)
 
 (* 변수 하나의 IntSet → 확장된 EltSet 맵 (변수명 포함) *)
 let collect_from_mem (mem : AbsMemory2.t) 
@@ -122,15 +152,15 @@ let _ =
   let entry = Bbpool.find (target_f.entry) !Bbpool.pool in
   let exit_bb = Bbpool.find (Cfg.exit target_f.cfg) !Bbpool.pool in  
   
-  (* let _ = Format.printf "--CFG--\n %a@." Cfg.pp target_f.cfg in *)
+  (* let _ = Format.printf "--CFG--\n %a@." Cfg.pp target_f.cfg in
   let module Dot = To_dot.Make(States2) in
-  let _ = Dot.func_to_dot target_f in
+  let _ = Dot.func_to_dot target_f in *)
   
   (* Set Analzyer*)
   let init_mem = Analyzer2.init (Init.m ())  in
   let init_mem = TF2.seed_entry_defs_bot target_f init_mem in
   let _ = Analyzer2.LoopCounter.set_max_count 10 in
-  (* let init_mem = TF2.seed_argv_addrs init_mem in *)
+  let init_mem = TF2.seed_argv_addrs init_mem in
   let init_states = States2.update (entry, MyContext2.empty ()) init_mem States2.empty in
   let _ = Format.printf "set domain analyze...@." in
   (* let _ = Format.printf "%a\n" States2.pp init_states in
@@ -140,14 +170,14 @@ let _ =
   let s = Analyzer2.analyze entry init_states in
   let _ = Format.printf "set domain analyze done...@." in
   let s = !Analyzer2.summary in
-  (* let _ = Format.printf "%a\n" States2.pp s in
-  let _ = Format.printf "ENV \n %a\n" Env.pp !Env.env in *)
+  (* let _ = Format.printf "%a\n" States2.pp s in *)
+  (* let _ = Format.printf "ENV \n %a\n" Env.pp !Env.env in *)
   let b_state = !Analyzer2.summary2 in
-  let _ = Format.printf "B STATE %a\n" States2.pp b_state in
+  (* let _ = Format.printf "B STATE %a\n" States2.pp b_state in *)
   let _ = AbsInterval.global_b := build_threshold_map b_state in
-  let _ = Format.printf "\n--------------------global b\n" in
+  (* let _ = Format.printf "\n--------------------global b\n" in
   let _ = AbsInterval.pp_global_b () in
-  let _ = Format.printf "\n--------------------\n" in
+  let _ = Format.printf "\n--------------------\n" in *)
   (* let _ = Format.printf "%a\n" States2.pp s2 in *)
   
   (* let init_mem = Analyzer.init (Init.m ())  in
@@ -166,8 +196,9 @@ let _ =
   let s = Analyzer.analyze entry init_states in
   let _ = Format.printf "first analyze done...@." in
   let s1 = !Analyzer.summary in
-  let _ = Format.printf "%a\n" States.pp s1 in
-  let _ = Format.printf "ENV \n %a\n" Env.pp !Env.env in
+  let _ = Format.printf "%a\n" States.pp_exit s1 in
+  (* let _ = Format.printf "ENV \n %a\n" Env.pp !Env.env in
+  let _ = Format.printf "%a\n" States.pp s in *)
   
   (* Set arg_esp address as 200000*)
   let _ = Analyzer.LoopCounter.reset () in
@@ -220,7 +251,7 @@ let _ =
   StackShape.pp_json stack_shape oc2;
   close_out oc2;
 
-  let merged_var_set = StackShape.merge_array_vars var_set merged_chunks in
+  let merged_var_set = StackShape.merge_array_vars var_set stack_shape in
   let oc = open_out "output.json" in
   StackShape.pp_var_set_json merged_var_set oc;
   close_out oc;

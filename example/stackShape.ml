@@ -420,21 +420,35 @@ let merge_chunks (chunks : (int * int) list) : (int * int) list =
     ~merge_two:(fun (a_s, a_e) (b_s, b_e) -> (min a_s b_s, max a_e b_e))
     chunks
 
-(* [merge_array_vars var_set chunks]
-   var_set에서 어떤 chunk의 [s, e] 범위에 속하는 주소들을
-   그 chunk의 시작 offset 항목으로 묶는다.
-   chunk에 안 속하는 주소는 자기 자신으로 둔다.
-   (output.json 산출용으로 계속 사용됨) *)
+(* [merge_array_vars var_set slots]
+   var_set의 각 주소를 "논리적 객체" 단위로 묶어 output.json(calli.json)용
+   var_set을 만든다.
+   배열은 원소 포인터들이 각 원소 offset에 흩어져 있으므로 배열 시작 하나로
+   접지만, struct는 필드마다 타입이 다른 별개 객체이므로 접지 않고 필드 단위로
+   남긴다.
+   - 어떤 slot에도 안 속함        -> 자기 offset
+   - Chunk ArrayKind / Unknown    -> chunk 시작 offset
+   - Chunk StructKind의 var/array -> 그 필드의 시작 offset
+   - Chunk StructKind의 unknown 필드, 또는 어느 필드에도 안 걸림
+                                  -> chunk 시작 offset (정체 불명이라 노출하지 않음) *)
 let merge_array_vars
     (var_set : var_set)
-    (chunks : (int * int) list)
+    (slots : stack_slot list)
     : var_set =
 
-  (* offset을 감싸는 chunk가 있으면 그 시작 offset을 반환 *)
-  let containing_chunk_start offset =
-    match List.find_opt (fun (s, e) -> s <= offset && offset <= e) chunks with
-    | Some (s, _) -> Some s
-    | None -> None
+  (* offset이 묶여야 할 목표 offset을 정한다 *)
+  let target_of offset =
+    match List.find_opt (fun s ->
+      s.start_offset <= offset && offset <= s.end_offset) slots
+    with
+    | None | Some { entry = Variable; _ } -> offset
+    | Some ({ entry = Chunk StructKind; _ } as slot) ->
+      (match List.find_opt (fun f ->
+        f.fstart <= offset && offset <= f.fend) slot.fields
+       with
+       | Some { fkind = (FieldVar | FieldArray); fstart; _ } -> fstart
+       | _ -> slot.start_offset)
+    | Some slot -> slot.start_offset
   in
 
   let merged : (int, string list) Hashtbl.t = Hashtbl.create 100 in
@@ -443,11 +457,7 @@ let merge_array_vars
     match addr_to_offset addr_str with
     | None -> ()
     | Some offset ->
-      let target_offset =
-        match containing_chunk_start offset with
-        | Some s -> s
-        | None -> offset
-      in
+      let target_offset = target_of offset in
       let prev = Option.value (Hashtbl.find_opt merged target_offset) ~default:[] in
       Hashtbl.replace merged target_offset (prev @ names)
   ) var_set;
@@ -485,9 +495,12 @@ let determine_chunk_kind_and_width
   else begin
     let widths = ref IntSet.empty in
     for offset = s to e do
-      match Hashtbl.find_opt offset_types offset with
+      (match Hashtbl.find_opt offset_types offset with
       | Some ws -> widths := IntSet.union !widths ws
-      | None -> ()
+      | None -> ());
+      (match Hashtbl.find_opt array_widths offset with
+      | Some ws -> widths := IntSet.union !widths ws
+      | None -> ())
     done;
     match IntSet.cardinal !widths with
     | 0 -> (Unknown, None)

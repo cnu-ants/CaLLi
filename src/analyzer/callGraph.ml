@@ -86,3 +86,12 @@ let make_call_graph (m : Module.t) : t =
   in
   let _ = Format.printf "callGraph make done@." in
   call_graph
+
+
+let pp_simple fmt (g : t) =
+  M.iter (fun caller e ->
+    e.calling
+    |> List.sort_uniq String.compare
+    |> List.iter (fun callee ->
+          F.fprintf fmt "@%s -> @%s@." caller callee)
+  ) g

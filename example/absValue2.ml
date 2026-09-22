@@ -120,7 +120,6 @@ module AbsInt = AbsIntSet
         failwith ("sub_slt error"^s)
     
     let app_sgt v1 v2 =
-      let _ = Format.printf "Test pinpoint@." in 
       match v1, v2 with
       | AbsInt n1, AbsInt n2 -> AbsInt (AbsInt.app_sgt n1 n2)
       | AbsBot, _ -> AbsBot
