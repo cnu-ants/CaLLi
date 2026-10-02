@@ -393,9 +393,16 @@ let transform_module llm : Module.t =
   let glist = 
     Llvm.fold_left_globals
     (fun glist v -> 
-          let var : Global.t = 
 
-        {name=get_name v; ty=transform_expr_type v; value=transform_e (Llvm.operand v 0) ""} in
+      let value = 
+        if Llvm.num_operands v = 0 then Expr.Undef 
+        else transform_e (Llvm.operand v 0) ""
+      in
+
+      let var : Global.t = 
+        (*{name=get_name v; ty=transform_expr_type v; value=transform_e (Llvm.operand v 0) ""}*)
+        {name = get_name v; ty=transform_expr_type v; value}
+      in
       glist@[var])
     []
     llm
