@@ -685,7 +685,7 @@ let contains_substring s sub =
     if not (List.mem (s, e) !chunks) then
       chunks := (s, e) :: !chunks
 
-(* memset(dst, c, n): dst부터 n바이트를 c로 채운다.
+(* (* memset(dst, c, n): dst부터 n바이트를 c로 채운다.
    dst는 단일 주소일 수도, 객체 전체를 나타내는 주소 집합
    (예: malloc이 만든 cell_set)일 수도 있다. 어느 쪽이든 그 집합의
    최소 원소를 "객체의 시작 주소"로 보고, 거기서부터 1바이트씩 n개의
@@ -744,9 +744,9 @@ let model_memset (args : Expr.t list) (mem : AbsMemory.t) : AbsMemory.t =
       let mem = AbsMemory.update addr c mem in
       fill mem (i + 1)
   in
-  fill mem 0
+  fill mem 0 *)
     
-(* memcpy(dst, src, n): dst부터 n바이트를 src에서 복사.
+(* (* memcpy(dst, src, n): dst부터 n바이트를 src에서 복사.
    지금은 stack shape 목적이라 값 복사는 하지 않고,
    덩어리 범위만 기록한다. *)
 let model_memcpy (args : Expr.t list) (mem : AbsMemory.t) : AbsMemory.t =
@@ -760,6 +760,7 @@ let model_memcpy (args : Expr.t list) (mem : AbsMemory.t) : AbsMemory.t =
   let n   = abs_eval n_e mem in
 
   (* dst가 단일 주소인가 *)
+  let _ = Format.printf "mem \n %a \n" AbsMemory.pp mem in 
   let base_int =
     match dst with
     | AbsValue.AbsAddr a when AbsValue.AbsAddr.is_singleton a ->
@@ -786,7 +787,72 @@ let model_memcpy (args : Expr.t list) (mem : AbsMemory.t) : AbsMemory.t =
   let _ = add_bulk_range start_offset end_offset in
 
   (* 메모리는 건드리지 않고 그대로 반환 *)
-  mem
+  mem *)
+
+
+let model_memset (args : Expr.t list) (mem : AbsMemory.t) : AbsMemory.t =
+  match args with
+  | dst_e :: c_e :: n_e :: _ ->
+      let dst = abs_eval dst_e mem in
+      let n = abs_eval n_e mem in
+
+      let base_opt =
+        match dst with
+        | AbsValue.AbsAddr a ->
+            (match AbsValue.AbsAddr.extract_value_string a with
+             | Some s -> int_of_string_opt s
+             | None -> None)
+        | _ -> None
+      in
+      let size_opt =
+        match n with
+        | AbsValue.AbsInt i ->
+            (match AbsInterval.singleton_value i with
+             | Some z when Z.fits_int z -> Some (Z.to_int z)
+             | _ -> None)
+        | _ -> None
+      in
+
+      (match base_opt, size_opt with
+       | Some base_int, Some n_int when n_int > 0 ->
+           let c = abs_eval c_e mem in
+           let start_offset = base_int - !tmp_addr in
+           let end_offset = start_offset + n_int - 1 in
+           add_chunk start_offset end_offset;
+           add_bulk_range start_offset end_offset;
+
+           let rec fill mem i =
+             if i >= n_int then mem
+             else
+               let addr = string_of_int (base_int + i) in
+               fill (AbsMemory.update addr c mem) (i + 1)
+           in
+           fill mem 0
+       | _ -> mem)
+  | _ -> mem
+
+  let model_memcpy (args : Expr.t list) (mem : AbsMemory.t) : AbsMemory.t =
+  match args with
+  | dst_e :: _src_e :: n_e :: _ ->
+      let dst = abs_eval dst_e mem in
+      let n = abs_eval n_e mem in
+      (match dst, n with
+       | AbsValue.AbsAddr a, AbsValue.AbsInt size
+         when AbsValue.AbsAddr.is_singleton a ->
+           (match int_of_string_opt (AbsValue.AbsAddr.min_elt a),
+                  AbsInterval.singleton_value size with
+            | Some base_int, Some z when Z.fits_int z ->
+                let n_int = Z.to_int z in
+                if n_int > 0 then (
+                  let start_offset = base_int - !tmp_addr in
+                  let end_offset = start_offset + n_int - 1 in
+                  add_chunk start_offset end_offset;
+                  add_bulk_range start_offset end_offset
+                );
+                mem
+            | _ -> mem)
+       | _ -> mem)
+  | _ -> mem
 
 (* bb_name 끝에서부터 '#'로 나눈 뒤, 뒤에서부터 처음 나오는 숫자 조각을 찾는다.
    "...#entry#3"      -> 3
