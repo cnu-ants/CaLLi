@@ -911,6 +911,7 @@ let abs_interp_term' (bb_name: string) (term : Term.t) (mem : AbsMemory.t) =
     | Exit _ -> mem
     (* | CallSite _ -> mem *)
     | CallSite {callee; args; _} ->
+      let mem = AbsMemory.update ret_addr AbsValue.top mem in
       if contains_substring callee "memset" then model_memset args mem
       else if contains_substring callee "memcpy" then model_memcpy args mem
       else if contains_substring callee "malloc" then model_malloc bb_name args mem 
