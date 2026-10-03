@@ -588,17 +588,17 @@ let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
       | Load {name; operand; _} ->
         let addr = Env.find name !Env.env in
         let res = abs_eval operand mem in
-        (* 디버그 1: operand의 추상값 확인 *)
-        (* let _ = Format.printf "[DEBUG Load] name=%s, operand res=%a\n" name AbsValue.pp res in *)
         let res' =
           match res with
           | AbsAddr a ->
               let result = AbsValue.AbsAddr.fold
                 (fun a' v -> 
-                  let loaded = AbsMemory.find a' mem in
-                  (* 디버그 2: 각 주소에서 읽은 값 확인 *)
-                  (* let _ = Format.printf "[DEBUG Load] addr=%s, loaded=%a, acc=%a\n" 
-                            a' AbsValue.pp loaded AbsValue.pp v in *)
+                  (* let loaded = AbsMemory.find a' mem in *)
+                  let loaded = 
+                    match AbsMemory.find_opt a' mem with
+                    | Some v -> v 
+                    | None -> AbsValue.top 
+                  in
                   AbsValue.join v loaded)
                 a AbsValue.bot
               in
