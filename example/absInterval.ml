@@ -419,12 +419,16 @@ module CompOp = struct
   let (<) n1 n2 = 
     match n1, n2 with
     | IntBot, _ | _, IntBot -> alpha (Z.zero)
-    | IntInterval {min=min0; max=max0}, IntInterval {min=min1; max=max1} ->
-        if (Elt.(min0 == max0) && Elt.(min1 == max1) && Elt.(min0 == min1)) 
+    | IntInterval {min=min0; max=max0}, 
+      IntInterval {min=min1; max=max1} ->
+        if Elt.(max0 < min1) then alpha (Z.one)
+        else if Elt.(min0 >= max1) then alpha (Z.zero)
+        else IntInterval { min=Elt.zero; max=Elt.one }
+        (* if (Elt.(min0 == max0) && Elt.(min1 == max1) && Elt.(min0 == min1)) 
           then alpha (Z.zero)
         else if Elt.(min1 > max0) || Elt.(min0 > max1) 
           then alpha (Z.one)
-        else IntInterval {min=Elt.zero; max=Elt.one}
+        else IntInterval {min=Elt.zero; max=Elt.one} *)
 
 end
 
@@ -628,22 +632,7 @@ let widening_with_B n1 n2 b =
     let max' = if Elt.(n2_max > n1_max) then get_max_in_B b n2_max else n1_max in 
     let v = IntInterval {min = min'; max = max'} in 
     v
-    (* IntInterval {min = min'; max = max'} *)
-  (* | IntInterval { min = n1_min; max = n1_max}, IntInterval { min = n2_min; max = n2_max } -> 
-    if n1 <= n2 then
-      if n1 = n2 then n2
-      else 
-        (*let _ = counter_B := !counter_B + 1 in
-        if !counter_B > threshold_B then top else*)
-        let _ = Format.printf "TARGET : %a %a@." pp n1 pp n2 in
-        let min' = if Elt.(n2_min < n1_min) then let min = get_min_in_B b n2_min in let _ =  Format.printf "Min : %a@." pp_elt min in min else MinInf in
-        let max' = if Elt.(n2_max > n1_max) then let max = get_max_in_B b n2_max in let _ =  Format.printf "Max : %a@." pp_elt max in max else MaxInf in 
-        let _ = Format.printf "MIN: %a MAX: %a@." pp_elt min' pp_elt max' in
-        let v = IntInterval {min = min'; max = max'} in 
-        let _ = Format.printf "WIDEN : %a@." pp v in 
-        v
-    else join n1 n2  *)
-    
+
 (* new *) (* set_summary: (bb * ctxt) * absMem *) (* absMem: absaddr * absval *)
 let widen key n1 n2 = 
   (* let test_b = EltSet.of_list [
