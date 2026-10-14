@@ -652,6 +652,55 @@ let build_stack_shape
   List.sort (fun a b -> compare b.start_offset a.start_offset)
     (chunk_slots @ var_slots)
 
+(* [add_libraryfunc_chunks modeled_buffers array_widths]
+   전처리(라이브러리 함수 모델링)가 알려준 버퍼 정보를 chunk 탐지 hint로 반영한다.
+   각 버퍼 (start_offset, byte_length, source_function)에 대해
+   - [start, start + byte_length - 1] (inclusive) 범위를 chunk로 반환하고,
+   - 그 범위의 array_widths를 {1}로 덮어써서, determine_chunk_kind_and_width의
+     1순위 경로(범위 전체가 균일한 폭)로 i8 배열(ArrayKind)이 되도록 한다.
+   외부 hint를 IR에서 관찰한 폭보다 우선하므로, 범위 안의 기존 array_widths는
+   덮어쓴다(offset_types는 건드리지 않는다).
+   반환된 chunk들은 다른 chunk들과 함께 merge_chunks로 병합한다. *)
+let add_libraryfunc_chunks
+    (modeled_buffers : (int * int * string) list)
+    (array_widths : (int, IntSet.t) Hashtbl.t)
+    : (int * int) list =
+  List.filter_map (fun (start, length, _source) ->
+    if length <= 0 then None
+    else begin
+      let e = start + length - 1 in
+      for offset = start to e do
+        Hashtbl.replace array_widths offset (IntSet.singleton 1)
+      done;
+      Some (start, e)
+    end
+  ) modeled_buffers
+
+
+(* 인접 항목 사이에 gap이 있으면 아래쪽 항목을 위쪽 항목의
+   start까지 확장하고, 바이트 단위 배열로 분류한다. *)
+let rec fill_stack_gaps_as_arrays
+    (slots : stack_slot list) : stack_slot list =
+  match slots with
+  | upper :: lower :: rest ->
+      let lower_end =
+        match lower.entry with
+        | Variable -> lower.end_offset
+        | Chunk _ -> lower.end_offset + 1
+      in
+      let lower =
+        if lower_end < upper.start_offset &&
+          not (lower.entry = Chunk ArrayKind && lower.array_width = Some 1) then
+          { lower with
+            end_offset = upper.start_offset - 1;
+            entry = Chunk ArrayKind;
+            fields = [];
+            array_width = Some 4 }
+        else
+          lower
+      in
+      upper :: fill_stack_gaps_as_arrays (lower :: rest)
+  | _ -> slots
 
 (* ===== 출력 함수들 ===== *)
 
@@ -667,8 +716,7 @@ let pp_stack_shape (slots : stack_slot list) (_var_set : var_set) =
     let offset_str = offset_to_hex slot.start_offset in
     match slot.entry with
     | Variable ->
-      Format.printf "  [%d ~ %d] : %s@."
-        slot.end_offset slot.start_offset offset_str
+      Format.printf "  [%d] : %s@." slot.start_offset offset_str
     | Chunk kind ->
       let kind_str = match kind with
         | Unknown -> "chunk"
@@ -708,11 +756,12 @@ let pp_stack_shape (slots : stack_slot list) (_var_set : var_set) =
 (* [pp_json slots oc]
    스택 슬롯 목록을 "variables" / "arrays" / "structs" / "unknown"
    네 키로 분리해 JSON 형태로 out_channel에 출력한다.
+   - variables 항목은 offset/start만 담는다. 단독 스칼라 변수는 크기 근거가
+     없으므로 end를 출력하지 않는다.
    - arrays 항목에는 원소 타입(type)과 원소 개수(size)를 함께 담는다.
    - structs 항목에는 내부 필드(var/array/unknown)를 "fields" 배열로 함께 담고,
      그 중 array 필드에도 type/size를 함께 담는다.
-   모든 end는 variables(offset+4, exclusive)와 표기를 통일하기 위해
-   chunk 계열은 내부 inclusive 값에 +1 해서 출력한다. *)
+   chunk 계열의 end는 내부 inclusive 값에 +1 해서 exclusive로 출력한다. *)
 let pp_json (slots : stack_slot list) (oc : out_channel) =
   let fmt = Format.formatter_of_out_channel oc in
 
@@ -767,16 +816,18 @@ let pp_json (slots : stack_slot list) (oc : out_channel) =
     Format.fprintf fmt "  \"%s\": [@\n" key;
     let n = List.length items in
     List.iteri (fun i slot ->
-      (* Variable은 이미 exclusive(offset+4), Chunk는 inclusive이므로 +1 보정 *)
-      let display_end = match slot.entry with
-        | Variable -> slot.end_offset
-        | Chunk _ -> slot.end_offset + 1
-      in
       Format.fprintf fmt "    {@\n";
-      Format.fprintf fmt "      \"offset\": \"%s\", \"start\": %d, \"end\": %d"
-        (offset_to_hex slot.start_offset)
-        slot.start_offset
-        display_end;
+      (* Variable은 offset/start만, Chunk는 inclusive end에 +1 해서 exclusive로 *)
+      (match slot.entry with
+       | Variable ->
+         Format.fprintf fmt "      \"offset\": \"%s\", \"start\": %d"
+           (offset_to_hex slot.start_offset)
+           slot.start_offset
+       | Chunk _ ->
+         Format.fprintf fmt "      \"offset\": \"%s\", \"start\": %d, \"end\": %d"
+           (offset_to_hex slot.start_offset)
+           slot.start_offset
+           (slot.end_offset + 1));
       (match with_array_info, slot.array_width with
        | true, Some w ->
          let size = (slot.end_offset - slot.start_offset + 1) / w in

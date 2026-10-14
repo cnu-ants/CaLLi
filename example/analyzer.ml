@@ -55,6 +55,27 @@ end)
 
 module S = Set.Make(String)
 
+
+let load_modeled_buffers path : (int * int * string) list =
+  try
+    match Yojson.Basic.from_file path with
+    | `Assoc fields ->
+        (match List.assoc_opt "buffers" fields with
+         | Some (`List entries) ->
+             List.filter_map (function
+               | `Assoc fields ->
+                   (match List.assoc_opt "start_offset" fields,
+                          List.assoc_opt "byte_length" fields,
+                          List.assoc_opt "source_function" fields with
+                    | Some (`Int start), Some (`Int length),
+                      Some (`String source) ->
+                        Some (start, length, source)
+                    | _ -> None)
+               | _ -> None) entries
+         | _ -> [])
+    | _ -> []
+  with Sys_error _ | Yojson.Json_error _ -> []
+
 (* threshold 외삽 단계: (개수, diff 배율).
 앞 단계가 끝난 지점에서 이어서 진행한다.
 가까운 구간은 촘촘하게, 먼 구간은 성기게 깔아
@@ -241,9 +262,16 @@ let _ =
 
   let offset_types = StackShape.collect_offset_types target_f s1_exit_mem in
   let array_widths = StackShape.collect_array_widths target_f var_set s1_exit_mem in
+
+  let modeled_buffers = load_modeled_buffers "library_models.json" in
+  let lib_chunks = StackShape.add_libraryfunc_chunks modeled_buffers array_widths in
+  let _ = List.iter (fun (s, e) -> TF.add_chunk s e) lib_chunks in
+  let merged_chunks = StackShape.merge_chunks !TF.chunks in
+
   let () = StackShape.fill_bulk_widths !TF.bulk_ranges offset_types array_widths in
   let merged_chunks = StackShape.extend_array_chunk_ends merged_chunks array_widths in
-  let stack_shape = StackShape.build_stack_shape var_set merged_chunks offset_types array_widths in
+  let stack_shape =
+    StackShape.build_stack_shape var_set merged_chunks offset_types array_widths in
 
   let _ = StackShape.pp_stack_shape stack_shape var_set in 
 
