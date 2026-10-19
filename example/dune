@@ -2,5 +2,5 @@
  
 (executable
   (name analyzer)
-  (libraries calli)
+  (libraries calli yojson)
   (flags (:standard -w -26-40-27-33)))

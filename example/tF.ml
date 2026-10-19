@@ -349,6 +349,43 @@ let rec prune s (v:AbsValue.t) mem (meta : Metadata.t) =
         | _ -> mem
         )
 
+        (* ULT *)
+        | Ult when (v = t) ->
+            (match operand0, operand1 with
+            | Name {name; _}, ConstInt _ ->
+                let a = Env.find name !Env.env in
+                let old_value = AbsMemory.find a mem in
+                let bound = abs_eval operand1 mem in
+
+                let pruned_v =
+                  set_constraint_cond Cond.Ult old_value bound
+                in
+
+                if AbsValue.(pruned_v <= AbsValue.bot) then
+                  AbsMemory.bot
+                else
+                  AbsMemory.update a pruned_v mem
+
+            | _ -> mem)
+
+        | Ult when (v = f) ->
+            (match operand0, operand1 with
+            | Name {name; _}, ConstInt _ ->
+                let a = Env.find name !Env.env in
+                let old_value = AbsMemory.find a mem in
+                let bound = abs_eval operand1 mem in
+
+                let pruned_v =
+                  set_constraint_cond Cond.Uge old_value bound
+                in
+
+                if AbsValue.(pruned_v <= AbsValue.bot) then
+                  AbsMemory.bot
+                else
+                  AbsMemory.update a pruned_v mem
+
+            | _ -> mem)
+
         (* SLT *)
         | Slt when (v = t)  -> 
         (match operand0, operand1 with
@@ -532,34 +569,6 @@ let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
       in
       mem'
 
-    (* | IntToPtr {name; operand; _} ->
-      let addr = Env.find name !Env.env in
-      let a = abs_eval operand mem in
-      let _ = Format.printf "[inttoptr] %s <- %a  (bb=%s)@."
-      name AbsValue.pp a stmt.bb_name in
-      let mem' =   
-          (match a with
-          | AbsInt i ->
-              let addr' = AbsValue.AbsAddr.AddrSet
-                (AbsValue.AbsInt.fold
-                (fun i addrset ->
-                  let s = AbsValue.AbsInt.to_string i in
-                  AbsValue.AbsAddr.S.add s addrset)
-                i AbsValue.AbsAddr.S.empty)
-              in 
-              AbsMemory.update addr (AbsAddr addr') mem
-          | AbsBot -> 
-              AbsMemory.update addr AbsValue.bot mem
-          | _ -> 
-              AbsMemory.update addr AbsValue.top mem
-              (* let _ = Format.printf "%a@.%a@." AbsValue.pp a AbsMemory.pp mem in
-              let _ = Format.printf "--\n %a@.%a@.--\n" AbsValue.pp a AbsMemory.pp mem in
-              let _ = Format.printf "==ENV==\n %a@." Env.pp !Env.env in *)
-              
-            )
-      in
-      mem' *)
-
     | PHI {name; incoming; _} ->
       let result =
         List.fold_left
@@ -571,45 +580,31 @@ let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
       let addr = Env.find name !Env.env in
       AbsMemory.update addr result mem
 
-    (* | Load {name; operand; _} ->
+    | Load {name; operand; _} ->
       let addr = Env.find name !Env.env in
       let res = abs_eval operand mem in
       let res' =
         match res with
         | AbsAddr a ->
-            AbsValue.AbsAddr.fold
-              (fun a' v -> AbsValue.join v (AbsMemory.find a' mem))
+            let result = AbsValue.AbsAddr.fold
+              (fun a' v -> 
+                (* let loaded = AbsMemory.find a' mem in *)
+                let loaded = 
+                  match AbsMemory.find_opt a' mem with
+                  | Some v -> v 
+                  | None -> AbsValue.top 
+                in
+                AbsValue.join v loaded)
               a AbsValue.bot
+            in
+            (* 디버그 3: fold 최종 결과 확인 *)
+            (* let _ = Format.printf "[DEBUG Load] fold result=%a\n" AbsValue.pp result in *)
+            result
         | AbsTop -> AbsValue.top
         | AbsBot -> AbsValue.bot
         | AbsInt _ -> AbsValue.top
       in
-      AbsMemory.update addr res' mem *)
-      | Load {name; operand; _} ->
-        let addr = Env.find name !Env.env in
-        let res = abs_eval operand mem in
-        let res' =
-          match res with
-          | AbsAddr a ->
-              let result = AbsValue.AbsAddr.fold
-                (fun a' v -> 
-                  (* let loaded = AbsMemory.find a' mem in *)
-                  let loaded = 
-                    match AbsMemory.find_opt a' mem with
-                    | Some v -> v 
-                    | None -> AbsValue.top 
-                  in
-                  AbsValue.join v loaded)
-                a AbsValue.bot
-              in
-              (* 디버그 3: fold 최종 결과 확인 *)
-              (* let _ = Format.printf "[DEBUG Load] fold result=%a\n" AbsValue.pp result in *)
-              result
-          | AbsTop -> AbsValue.top
-          | AbsBot -> AbsValue.bot
-          | AbsInt _ -> AbsValue.top
-        in
-        AbsMemory.update addr res' mem
+      AbsMemory.update addr res' mem
 
     | Prune {cond; value} ->
       let _a = Env.find cond !Env.env in
