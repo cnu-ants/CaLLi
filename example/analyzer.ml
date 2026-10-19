@@ -246,32 +246,31 @@ let _ =
 
   let var_set = AbsMemory.group_by_value_with_env filtered_mem reverse_env in 
 
-  (* loop 기반 덩어리를 찾아 chunks에 합친다 *)
+  (* loop 기반 덩어리: 인덱스 접근 범위(base ~ base+hi)까지 *)
   let loop_chunks = StackShape.detect_loop_chunks target_f var_set s1_exit_mem in
-  let _ = List.iter (fun (s, e) -> TF.add_chunk s e) loop_chunks in
+
+  (* 라이브러리 함수 모델링이 알려준 버퍼: 크기를 정확히 아는 덩어리 *)
+  let modeled_buffers = load_modeled_buffers "library_models.json" in
+  let lib_chunks = StackShape.add_libraryfunc_chunks modeled_buffers in
 
   let _ = Format.printf "=== Raw Chunks (before merge) ===@." in
-  let _ = List.iter (fun (s, e) -> Format.printf "  [%d ~ %d]@." s e) !TF.chunks in
-  let _ = List.iter (fun (s, e) -> Format.printf "  [%d ~ %d]@." s e) loop_chunks in
+  let _ = List.iter (fun (s, e) -> Format.printf "  [%d ~ %d] memset/memcpy@." s e) !TF.chunks in
+  let _ = List.iter (fun (s, e) -> Format.printf "  [%d ~ %d] loop@." s e) loop_chunks in
+  let _ = List.iter (fun (s, e) -> Format.printf "  [%d ~ %d] lib@." s e) lib_chunks in
 
-  (* memset/memcpy/loop가 모은 모든 chunk를 병합 *)
+  (* loop chunk의 end만 위쪽 다음 offset 바로 앞까지 늘린다.
+     memset/memcpy/라이브러리 chunk는 크기를 알므로 그대로 둔다. *)
+  let loop_chunks =
+    StackShape.extend_loop_chunk_ends loop_chunks var_set (!TF.chunks @ lib_chunks) in
+  let _ = List.iter (fun (s, e) -> TF.add_chunk s e) (loop_chunks @ lib_chunks) in
+
+  (* memset/memcpy/loop/라이브러리 chunk를 병합 *)
   let merged_chunks = StackShape.merge_chunks !TF.chunks in
   let _ = Format.printf "=== Merged Chunks ===@." in
   let _ = List.iter (fun (s, e) ->
     Format.printf "  [%d ~ %d]@." s e) merged_chunks in
 
-  let offset_types = StackShape.collect_offset_types target_f s1_exit_mem in
-  let array_widths = StackShape.collect_array_widths target_f var_set s1_exit_mem in
-
-  let modeled_buffers = load_modeled_buffers "library_models.json" in
-  let lib_chunks = StackShape.add_libraryfunc_chunks modeled_buffers array_widths in
-  let _ = List.iter (fun (s, e) -> TF.add_chunk s e) lib_chunks in
-  let merged_chunks = StackShape.merge_chunks !TF.chunks in
-
-  let () = StackShape.fill_bulk_widths !TF.bulk_ranges offset_types array_widths in
-  let merged_chunks = StackShape.extend_array_chunk_ends merged_chunks array_widths in
-  let stack_shape =
-    StackShape.build_stack_shape var_set merged_chunks offset_types array_widths in
+  let stack_shape = StackShape.build_stack_shape var_set merged_chunks in
 
   let _ = StackShape.pp_stack_shape stack_shape var_set in 
 
@@ -279,9 +278,8 @@ let _ =
   StackShape.pp_json stack_shape oc2;
   close_out oc2;
 
-  let merged_var_set = StackShape.merge_array_vars var_set stack_shape in
   let oc = open_out "output.json" in
-  StackShape.pp_var_set_json merged_var_set oc;
+  StackShape.pp_var_set_json var_set oc;
   close_out oc;
   Format.printf "JSON written to output.json@.";
 

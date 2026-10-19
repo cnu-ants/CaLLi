@@ -1,43 +1,22 @@
 open Calli
 
 module AbsValue = AbsValue
-module IntSet = Set.Make(Int)
 
 (* ===== 타입 정의 ===== *)
 
-(* 덩어리의 해석된 종류. 지금 단계에서는 전부 Unknown으로 생성되고,
-   나중에 타입 매핑 단계에서 ArrayKind / StructKind로 채워진다. *)
-type chunk_kind =
-  | Unknown
-  | ArrayKind
-  | StructKind
-
 (* 스택 엔트리 종류.
-   - Variable: 단독 스칼라 변수. 타입을 따지지 않는다.
-   - Chunk: 배열/struct 후보 덩어리. 종류(kind)만 갖고,
-            범위(start/end)는 stack_slot이 표현한다. *)
+   - Variable: 단독 스칼라 변수.
+   - Chunk: 덩어리. 범위(start/end)만 갖는다. 배열/struct 같은 종류나
+            원소 타입은 여기서 판정하지 않는다(타입은 ELIS type graph에서 정한다). *)
 type stack_entry =
   | Variable
-  | Chunk of chunk_kind
-
-(* struct 필드의 종류 *)
-type field_kind = FieldVar | FieldArray | FieldUnknown
-
-(* struct chunk 내부의 필드 하나 *)
-type struct_field = {
-  fstart : int;          (* 필드 시작 offset *)
-  fend : int;             (* 필드 끝 offset (포함) *)
-  fkind : field_kind;
-  fwidth : int option;    (* var: 필드 크기 / array: 원소 폭. unknown이면 None *)
-}
+  | Chunk
 
 (* 스택의 특정 슬롯 *)
 type stack_slot = {
   start_offset : int;  (* 슬롯 시작 오프셋 (낮은 주소) *)
   end_offset : int;    (* 슬롯 끝 오프셋 (높은 주소, inclusive) *)
   entry : stack_entry;
-  fields : struct_field list;  (* StructKind가 아니면 항상 [] *)
-  array_width : int option;    (* entry = Chunk ArrayKind일 때만 원소 폭. 그 외 None *)
 }
 
 (* 변수 집합: 주소값 문자열 (ex: "99952") -> 변수 이름 리스트 *)
@@ -63,17 +42,6 @@ let offset_to_hex (offset : int) : string =
   if offset >= 0 then Printf.sprintf "0x%x" offset
   else Printf.sprintf "#x%lx" (Int32.of_int offset)
 
-(* [type_name_of_width w]
-   바이트 폭을 LLVM 스타일 정수 타입 이름으로 변환한다.
-   흔한 폭(1/2/4/8)은 고정 이름, 그 외는 i(w*8) 형태로 생성한다. *)
-let type_name_of_width (w : int) : string =
-  match w with
-  | 1 -> "i8"
-  | 2 -> "i16"
-  | 4 -> "i32"
-  | 8 -> "i64"
-  | _ -> Printf.sprintf "i%d" (w * 8)
-
 (* [build_var_names var_set]
    var_set(주소 -> 이름 리스트)으로부터
    변수 이름 -> 주소 문자열 역방향 매핑 테이블을 구성한다. *)
@@ -83,55 +51,6 @@ let build_var_names (var_set : var_set) : (string, string) Hashtbl.t =
     List.iter (fun name -> Hashtbl.replace tbl name addr_str) names
   ) var_set;
   tbl
-
-(* [target_offsets ptr_val]
-   포인터 값(AbsAddr)이 가리키는 모든 주소를 offset 리스트로 꺼낸다.
-   AddrSet의 각 주소를 offset으로 변환하고, 변환 실패한 건 뺀다.
-   주소가 아니면(AbsAddr가 아니면) 빈 리스트. *)
-let target_offsets (ptr_val : AbsValue.t) : int list =
-  match ptr_val with
-  | AbsValue.AbsAddr a ->
-    AbsValue.AbsAddr.fold (fun addr acc ->
-      match addr_to_offset addr with
-      | Some off -> off :: acc
-      | None -> acc
-    ) a []
-  | _ -> []
-
-(* [store_target_offsets name mem]
-   store의 name(포인터 변수 이름)이 가리키는 offset들을 반환한다.
-   Env/메모리 조회 실패 시 빈 리스트. *)
-let store_target_offsets (name : string) (mem : AbsMemory.t) : int list =
-  try
-    let addr = Env.find name !Env.env in
-    target_offsets (AbsMemory.find addr mem)
-  with _ -> []
-
-(* [load_target_offsets operand mem]
-   load의 operand(포인터 표현식)가 가리키는 offset들을 반환한다.
-   operand가 Name이 아니거나 조회 실패 시 빈 리스트. *)
-let load_target_offsets (operand : Expr.t) (mem : AbsMemory.t) : int list =
-  match operand with
-  | Expr.Name {name; _} ->
-    (try target_offsets (AbsMemory.find (Env.find name !Env.env) mem)
-     with _ -> [])
-  | _ -> []
-
-(* [byte_width_of_type ty]
-   Type.t에서 바이트 폭을 꺼낸다. Integer bitwidth를 8로 나눈다.
-   그 외 타입은 None. *)
-let byte_width_of_type (ty : Type.t) : int option =
-  match ty with
-  | Type.Integer {bitwidth} -> Some ((if bitwidth < 8 then 8 else bitwidth) / 8)
-  | _ -> None
-
-(* [byte_width_of_ptr_type ty]
-   Pointer 타입의 대상 타입에서 바이트 폭을 꺼낸다.
-   ex: i8* -> 1, i32* -> 4. Pointer가 아니거나 대상이 Integer가 아니면 None. *)
-let byte_width_of_ptr_type (ty : Type.t) : int option =
-  match ty with
-  | Type.Pointer {ty = inner} -> byte_width_of_type inner
-  | _ -> None
 
 (* [interval_hi_of_expr idx_expr mem]
    idx_expr가 Name이고 그 추상값이 singleton이 아닌 IntInterval이면
@@ -149,170 +68,6 @@ let interval_hi_of_expr (idx_expr : Expr.t) (mem : AbsMemory.t) : int option =
       | _ -> None
     with _ -> None)
   | _ -> None
-
-(* [collect_array_widths target_f var_set s2_exit_mem]
-   배열 접근 add(base + idx) -> inttoptr -> load/store 패턴을 찾아,
-   그 결과를 받는 inttoptr의 목적 타입에서 폭을 뽑아
-   base ~ base+hi 범위 전체(원소 폭만큼)에 기록한다.
-   collect_offset_types와는 별도의 테이블을 반환하며,
-   loop처럼 인덱스로 접근하는 "진짜 원소 단위" 폭 정보를 담는다. *)
-let collect_array_widths
-    (target_f : Function.t)
-    (var_set : var_set)
-    (s2_exit_mem : AbsMemory.t)
-    : (int, IntSet.t) Hashtbl.t =
-
-  let tbl : (int, IntSet.t) Hashtbl.t = Hashtbl.create 50 in
-  let var_names = build_var_names var_set in
-
-  let add offset width =
-    let prev = Option.value (Hashtbl.find_opt tbl offset) ~default:IntSet.empty in
-    Hashtbl.replace tbl offset (IntSet.add width prev)
-  in
-
-  Cfg.iter_from_entry (fun bb_name ->
-    let bb = Bbpool.find bb_name !Bbpool.pool in
-
-    (* 이 블록의 inttoptr 목록: (operand 이름 -> 폭) 매핑 미리 구성 *)
-    let ptr_widths : (string, int) Hashtbl.t = Hashtbl.create 20 in
-    List.iter (fun (stmt : Stmt.t) ->
-      match stmt.inst with
-      | IntToPtr {operand = Expr.Name {name = opname; _}; ty; _} ->
-        (match byte_width_of_ptr_type ty with
-         | Some w -> Hashtbl.replace ptr_widths opname w
-         | None -> ())
-      | _ -> ()
-    ) bb.stmts;
-
-    (* add(base + idx) 배열 접근을 찾아, 그 결과를 받는 inttoptr 폭을 기록 *)
-    let handle add_name base_name idx_expr =
-      match Hashtbl.find_opt var_names base_name with
-      | None -> ()
-      | Some base_addr_str ->
-        (match interval_hi_of_expr idx_expr s2_exit_mem with
-         | Some hi ->
-           (match addr_to_offset base_addr_str, Hashtbl.find_opt ptr_widths add_name with
-            | Some base_offset, Some width ->
-              (* base부터 base+hi까지, 원소 폭(width)만큼씩 채워가며 기록 *)
-              let i = ref 0 in
-              while !i <= hi do
-                for b = 0 to width - 1 do
-                  add (base_offset + !i + b) width
-                done;
-                i := !i + width
-              done
-            | _ -> ())
-         | None -> ())
-    in
-
-    List.iter (fun (stmt : Stmt.t) ->
-      match stmt.inst with
-      | BinaryOp {name; op = Add; operand0; operand1; _} ->
-        (match operand0 with
-         | Expr.Name {name = n; _} -> handle name n operand1
-         | _ -> ());
-        (match operand1 with
-         | Expr.Name {name = n; _} -> handle name n operand0
-         | _ -> ())
-      | _ -> ()
-    ) bb.stmts
-  ) target_f.entry target_f.cfg;
-  tbl
-
-(* [collect_offset_types target_f s2_exit_mem]
-   store/load 명령을 순회하며 각 offset이 접근된 바이트 폭들을 모은다.
-   (포인터 목적 타입 기반, byte_width_of_ptr_type 사용)
-   store/load가 가리키는 시작 주소부터 실제로 그 값이 차지하는 폭만큼
-   전체 범위를 채운다 (시작점 한 칸만 기록하면, fill_bulk_widths 등
-   이후 단계가 나머지 바이트를 "정보 없는 빈 칸"으로 착각해
-   잘못된 폭으로 덮어써버릴 수 있기 때문).
-   반환: offset -> 폭들의 집합. *)
-   let collect_offset_types
-   (target_f : Function.t)
-   (s2_exit_mem : AbsMemory.t)
-   : (int, IntSet.t) Hashtbl.t =
-
- let tbl : (int, IntSet.t) Hashtbl.t = Hashtbl.create 100 in
-
- let add offset width =
-   let prev = Option.value (Hashtbl.find_opt tbl offset) ~default:IntSet.empty in
-   Hashtbl.replace tbl offset (IntSet.add width prev)
- in
-
- (* 시작 offset부터 width바이트 전체 범위에 걸쳐 폭을 기록 *)
- let add_range start_off width =
-   for b = 0 to width - 1 do
-     add (start_off + b) width
-   done
- in
-
- Cfg.iter_from_entry (fun bb_name ->
-   let bb = Bbpool.find bb_name !Bbpool.pool in
-   List.iter (fun (stmt : Stmt.t) ->
-     match stmt.inst with
-     | Store {name; ty; _} ->
-       (match byte_width_of_ptr_type ty with
-        | Some width ->
-          List.iter (fun off -> add_range off width) (store_target_offsets name s2_exit_mem)
-        | None -> ())
-     | Load {operand; ty; _} ->
-       (match byte_width_of_ptr_type ty with
-        | Some width ->
-          List.iter (fun off -> add_range off width) (load_target_offsets operand s2_exit_mem)
-        | None -> ())
-     | _ -> ()
-   ) bb.stmts
- ) target_f.entry target_f.cfg;
- tbl
-
-(* [extend_array_chunk_ends chunks array_widths]
-   loop 기반 chunk 탐지는 "마지막 원소가 시작하는 offset"까지만 chunk 끝으로
-   잡기 때문에(원소 폭을 모르는 상태에서 범위만 잡는 설계), width>1인 원소의
-   경우 마지막 원소의 나머지 바이트(width-1개)가 chunk 밖으로 빠진다.
-   array_widths(indexed access 기반, 실제 폭 정보)를 이용해, chunk 끝 바로
-   다음 offset부터 같은 폭이 연속되는 만큼 끝을 확장해 보정한다. *)
-let extend_array_chunk_ends
-  (chunks : (int * int) list)
-  (array_widths : (int, IntSet.t) Hashtbl.t)
-  : (int * int) list =
-  List.map (fun (s, e) ->
-   match Hashtbl.find_opt array_widths e with
-   | Some ws when IntSet.cardinal ws = 1 ->
-     let w = IntSet.min_elt ws in
-     let new_e = ref e in
-     let continue_ = ref true in
-     while !continue_ do
-       match Hashtbl.find_opt array_widths (!new_e + 1) with
-       | Some ws2 when IntSet.equal ws2 (IntSet.singleton w) ->
-         incr new_e
-       | _ -> continue_ := false
-     done;
-     (s, !new_e)
-   | _ -> (s, e)
- ) chunks
-
-(* [fill_bulk_widths bulk_ranges offset_types array_widths]
-   memset/memcpy처럼 바이트 단위로 일괄 접근하는 범위(bulk_ranges)에 대해,
-   offset_types/array_widths 어디에도 폭 정보가 없는 offset에 한해서만
-   폭 1을 채운다. 이미 다른 근거(store/load, indexed access)가 있는
-   offset은 절대 덮어쓰지 않는, 가장 낮은 우선순위의 fallback이다.
-   (예: memcpy로만 채워진 char 배열이 정보 부재로 Unknown/padding으로
-   빠지는 것을 막기 위함. TF.bulk_ranges 등 memset/memcpy 모델링 쪽에서
-   기록한 (start, end) inclusive 범위 리스트를 넘겨받는다.) *)
-let fill_bulk_widths
-    (bulk_ranges : (int * int) list)
-    (offset_types : (int, IntSet.t) Hashtbl.t)
-    (array_widths : (int, IntSet.t) Hashtbl.t)
-    : unit =
-  List.iter (fun (s, e) ->
-    for offset = s to e do
-      let has_info =
-        Hashtbl.mem offset_types offset || Hashtbl.mem array_widths offset
-      in
-      if not has_info then
-        Hashtbl.replace offset_types offset (IntSet.singleton 1)
-    done
-  ) bulk_ranges
 
 (* [iter_array_accesses target_f var_set s2_exit_mem f]
    CFG를 entry부터 순회하며 BinaryOp(Add) 명령어에서
@@ -409,6 +164,31 @@ let detect_loop_chunks
   !results
 
 
+(* [extend_loop_chunk_ends loop_chunks var_set other_chunks]
+   loop 기반 chunk는 인덱스 접근 범위(base ~ base+hi)까지만 근거가 있고,
+   base+hi는 마지막 원소가 "시작"하는 offset이다. 원소 폭(타입)은 쓰지 않고,
+   end를 그 위쪽에서 처음 나오는 offset(var_set 변수, 다른 chunk의 시작,
+   없으면 0 = %arg_esp)의 바로 앞까지 늘린다.
+   padding이나 사이에 있는 미탐지 객체가 함께 잡힐 수 있으나 감수한다.
+   memset/memcpy/라이브러리 chunk는 크기를 정확히 알므로 대상이 아니다. *)
+let extend_loop_chunk_ends
+    (loop_chunks : (int * int) list)
+    (var_set : var_set)
+    (other_chunks : (int * int) list)
+    : (int * int) list =
+  let boundaries =
+    0
+    :: List.map fst other_chunks
+    @ List.map fst loop_chunks
+    @ List.filter_map (fun (addr_str, _) -> addr_to_offset addr_str) var_set
+  in
+  List.map (fun (s, e) ->
+    match List.filter (fun o -> o > e) boundaries with
+    | [] -> (s, e)
+    | above -> (s, List.fold_left min max_int above - 1)
+  ) loop_chunks
+
+
 (* ===== 병합 함수들 ===== *)
 
 (* [merge_chunks chunks]
@@ -420,220 +200,26 @@ let merge_chunks (chunks : (int * int) list) : (int * int) list =
     ~merge_two:(fun (a_s, a_e) (b_s, b_e) -> (min a_s b_s, max a_e b_e))
     chunks
 
-(* [merge_array_vars var_set slots]
-   var_set의 각 주소를 "논리적 객체" 단위로 묶어 output.json(calli.json)용
-   var_set을 만든다.
-   배열은 원소 포인터들이 각 원소 offset에 흩어져 있으므로 배열 시작 하나로
-   접지만, struct는 필드마다 타입이 다른 별개 객체이므로 접지 않고 필드 단위로
-   남긴다.
-   - 어떤 slot에도 안 속함        -> 자기 offset
-   - Chunk ArrayKind / Unknown    -> chunk 시작 offset
-   - Chunk StructKind의 var/array -> 그 필드의 시작 offset
-   - Chunk StructKind의 unknown 필드, 또는 어느 필드에도 안 걸림
-                                  -> chunk 시작 offset (정체 불명이라 노출하지 않음) *)
-let merge_array_vars
-    (var_set : var_set)
-    (slots : stack_slot list)
-    : var_set =
-
-  (* offset이 묶여야 할 목표 offset을 정한다 *)
-  let target_of offset =
-    match List.find_opt (fun s ->
-      s.start_offset <= offset && offset <= s.end_offset) slots
-    with
-    | None | Some { entry = Variable; _ } -> offset
-    | Some ({ entry = Chunk StructKind; _ } as slot) ->
-      (match List.find_opt (fun f ->
-        f.fstart <= offset && offset <= f.fend) slot.fields
-       with
-       | Some { fkind = (FieldVar | FieldArray); fstart; _ } -> fstart
-       | _ -> slot.start_offset)
-    | Some slot -> slot.start_offset
-  in
-
-  let merged : (int, string list) Hashtbl.t = Hashtbl.create 100 in
-
-  List.iter (fun (addr_str, names) ->
-    match addr_to_offset addr_str with
-    | None -> ()
-    | Some offset ->
-      let target_offset = target_of offset in
-      let prev = Option.value (Hashtbl.find_opt merged target_offset) ~default:[] in
-      Hashtbl.replace merged target_offset (prev @ names)
-  ) var_set;
-
-  Hashtbl.fold (fun offset names acc ->
-    (string_of_int (offset + base_addr), names) :: acc
-  ) merged []
-
-(* [determine_chunk_kind_and_width (s, e) offset_types array_widths]
-   chunk 범위 [s, e]의 종류를 판정하고, ArrayKind로 판정된 경우
-   그 근거가 된 원소 폭도 함께 반환한다(그 외 kind면 width는 None).
-   1순위: array_widths(loop 등 indexed access 기반)가 범위 전체를
-          균일한 폭 하나로 완전히 커버하면 곧바로 ArrayKind로 확정한다.
-          (bulk 초기화 store 등으로 offset_types에 섞여드는
-           잡음 폭을 걸러내기 위함)
-   폴백: array_widths로 판정할 수 없으면 offset_types(store/load 폭,
-         fill_bulk_widths로 보강된 값 포함)를 모아 폭이 없으면 Unknown,
-         하나로 균일하면 ArrayKind, 여러 개 섞이면 StructKind로 판정한다. *)
-let determine_chunk_kind_and_width
-    ((s, e) : int * int)
-    (offset_types : (int, IntSet.t) Hashtbl.t)
-    (array_widths : (int, IntSet.t) Hashtbl.t)
-    : chunk_kind * int option =
-
-  let arr_widths = ref IntSet.empty in
-  let fully_covered = ref true in
-  for offset = s to e do
-    match Hashtbl.find_opt array_widths offset with
-    | Some ws -> arr_widths := IntSet.union !arr_widths ws
-    | None -> fully_covered := false
-  done;
-
-  if !fully_covered && IntSet.cardinal !arr_widths = 1 then
-    (ArrayKind, Some (IntSet.min_elt !arr_widths))
-  else begin
-    let widths = ref IntSet.empty in
-    for offset = s to e do
-      (match Hashtbl.find_opt offset_types offset with
-      | Some ws -> widths := IntSet.union !widths ws
-      | None -> ());
-      (match Hashtbl.find_opt array_widths offset with
-      | Some ws -> widths := IntSet.union !widths ws
-      | None -> ())
-    done;
-    match IntSet.cardinal !widths with
-    | 0 -> (Unknown, None)
-    | 1 -> (ArrayKind, Some (IntSet.min_elt !widths))
-    | _ -> (StructKind, None)
-  end
-
-(* [determine_chunk_kind (s, e) offset_types array_widths]
-   determine_chunk_kind_and_width의 kind만 반환하는 호환용 래퍼. *)
-let determine_chunk_kind
-    (range : int * int)
-    (offset_types : (int, IntSet.t) Hashtbl.t)
-    (array_widths : (int, IntSet.t) Hashtbl.t)
-    : chunk_kind =
-  fst (determine_chunk_kind_and_width range offset_types array_widths)
-
-(* [chosen_width_at offset offset_types array_widths]
-   해당 offset에서 신뢰할 폭 하나를 고른다.
-   array_widths(indexed 접근 근거)를 우선하고, 없으면 offset_types에서
-   가장 작은 폭(초기화 등으로 섞인 넓은 잡음 폭보다 세밀한 접근을 신뢰)을 쓴다. *)
-let chosen_width_at
-    (offset : int)
-    (offset_types : (int, IntSet.t) Hashtbl.t)
-    (array_widths : (int, IntSet.t) Hashtbl.t)
-    : int option =
-  match Hashtbl.find_opt array_widths offset with
-  | Some ws when IntSet.cardinal ws >= 1 -> Some (IntSet.min_elt ws)
-  | _ ->
-    (match Hashtbl.find_opt offset_types offset with
-     | Some ws when IntSet.cardinal ws >= 1 -> Some (IntSet.min_elt ws)
-     | _ -> None)
-
-(* [split_struct_fields (s, e) offset_types array_widths]
-   StructKind로 판정된 chunk [s, e]를, 연속된 같은 폭 구간(run) 단위로
-   var/array/unknown 필드로 쪼갠다.
-   - run 안에 같은 폭 원소가 2개 이상 반복되면 배열 필드(FieldArray)
-   - 원소가 사실상 1개뿐이면(나머지 바이트가 안 맞아떨어져도) 배열이 아니라
-     그 폭의 스칼라 변수(FieldVar)로 취급한다. 남는 바이트는 별도 unknown으로 분리.
-   - 폭 정보가 없는 구간 -> FieldUnknown (padding 등) *)
-let split_struct_fields
-    ((s, e) : int * int)
-    (offset_types : (int, IntSet.t) Hashtbl.t)
-    (array_widths : (int, IntSet.t) Hashtbl.t)
-    : struct_field list =
-
-  let n = e - s + 1 in
-  let widths = Array.make n None in
-  for i = 0 to n - 1 do
-    widths.(i) <- chosen_width_at (s + i) offset_types array_widths
-  done;
-
-  (* store는 시작 주소 한 지점에만 폭이 기록되므로,
-     그 폭만큼 뒤 칸이 비어있으면 같은 값으로 채운다 (이미 채워진 자리는 유지) *)
-  for i = 0 to n - 1 do
-    match widths.(i) with
-    | Some w when w > 1 ->
-      for k = 1 to w - 1 do
-        if i + k < n && widths.(i + k) = None then
-          widths.(i + k) <- Some w
-      done
-    | _ -> ()
-  done;
-
-  let runs = ref [] in
-  let i = ref 0 in
-  while !i < n do
-    (match widths.(!i) with
-     | None ->
-       let j = ref !i in
-       while !j < n && widths.(!j) = None do incr j done;
-       runs := (s + !i, s + !j - 1, None) :: !runs;
-       i := !j
-     | Some w ->
-       let j = ref !i in
-       while !j < n && widths.(!j) = Some w do incr j done;
-       runs := (s + !i, s + !j - 1, Some w) :: !runs;
-       i := !j)
-  done;
-  let runs = List.rev !runs in
-
-  (* run 하나를 최종 필드(들)로 변환.
-     원소가 2개 이상 반복되는 경우만 진짜 배열로 인정하고,
-     count<=1이면 스칼라 변수로 되돌린다 (나머지는 unknown으로 분리). *)
-  let finalize_run (rs, re, w) : struct_field list =
-    match w with
-    | None -> [{ fstart = rs; fend = re; fkind = FieldUnknown; fwidth = None }]
-    | Some w ->
-      let len = re - rs + 1 in
-      let count = len / w in
-      if count <= 1 then
-        let var_end = min re (rs + w - 1) in
-        if var_end >= re then
-          [{ fstart = rs; fend = re; fkind = FieldVar; fwidth = Some w }]
-        else
-          [{ fstart = rs; fend = var_end; fkind = FieldVar; fwidth = Some w };
-           { fstart = var_end + 1; fend = re; fkind = FieldUnknown; fwidth = None }]
-      else
-        [{ fstart = rs; fend = re; fkind = FieldArray; fwidth = Some w }]
-  in
-
-  List.concat_map finalize_run runs
-
-(* [build_stack_shape var_set chunks offset_types array_widths]
+(* [build_stack_shape var_set chunks]
    var_set과 chunks(병합된 덩어리 범위)로부터 전체 stack_slot 리스트를 구성한다.
-   - chunks 범위는 determine_chunk_kind_and_width로 kind와(ArrayKind인 경우) 원소
-     폭을 판정해 Chunk 슬롯으로. StructKind로 판정된 chunk는 split_struct_fields로
-     내부 필드도 함께 채운다.
+   - chunks 범위는 Chunk 슬롯으로.
    - chunks 어디에도 속하지 않는 var_set 변수는 Variable 슬롯으로.
    결과는 start_offset 내림차순(스택 위쪽 -> 아래쪽)으로 정렬해 반환한다. *)
 let build_stack_shape
     (var_set : var_set)
     (chunks : (int * int) list)
-    (offset_types : (int, IntSet.t) Hashtbl.t)
-    (array_widths : (int, IntSet.t) Hashtbl.t)
     : stack_slot list =
 
   let in_any_chunk offset =
     List.exists (fun (s, e) -> s <= offset && offset <= e) chunks
   in
 
-  (* 1) chunk들을 판정된 kind로 Chunk 슬롯으로. StructKind면 필드도 채운다 *)
   let chunk_slots =
     List.map (fun (s, e) ->
-      let kind, width = determine_chunk_kind_and_width (s, e) offset_types array_widths in
-      let fields =
-        if kind = StructKind then split_struct_fields (s, e) offset_types array_widths
-        else []
-      in
-      { start_offset = s; end_offset = e; entry = Chunk kind; fields; array_width = width }
+      { start_offset = s; end_offset = e; entry = Chunk }
     ) chunks
   in
 
-  (* 2) 어떤 chunk에도 속하지 않는 var_set 변수만 Variable 슬롯으로 *)
   let var_slots =
     List.filter_map (fun (addr_str, _) ->
       match addr_to_offset addr_str with
@@ -643,73 +229,34 @@ let build_stack_shape
         else
           Some { start_offset = offset;
                  end_offset = offset + 4;
-                 entry = Variable;
-                 fields = [];
-                 array_width = None }
+                 entry = Variable }
     ) var_set
   in
 
   List.sort (fun a b -> compare b.start_offset a.start_offset)
     (chunk_slots @ var_slots)
 
-(* [add_libraryfunc_chunks modeled_buffers array_widths]
-   전처리(라이브러리 함수 모델링)가 알려준 버퍼 정보를 chunk 탐지 hint로 반영한다.
-   각 버퍼 (start_offset, byte_length, source_function)에 대해
-   - [start, start + byte_length - 1] (inclusive) 범위를 chunk로 반환하고,
-   - 그 범위의 array_widths를 {1}로 덮어써서, determine_chunk_kind_and_width의
-     1순위 경로(범위 전체가 균일한 폭)로 i8 배열(ArrayKind)이 되도록 한다.
-   외부 hint를 IR에서 관찰한 폭보다 우선하므로, 범위 안의 기존 array_widths는
-   덮어쓴다(offset_types는 건드리지 않는다).
+(* [add_libraryfunc_chunks modeled_buffers]
+   전처리(라이브러리 함수 모델링)가 알려준 버퍼
+   (start_offset, byte_length, source_function)를
+   [start, start + byte_length - 1] (inclusive) chunk로 반환한다.
+   크기를 정확히 알 수 있으므로 end를 그대로 쓴다.
    반환된 chunk들은 다른 chunk들과 함께 merge_chunks로 병합한다. *)
 let add_libraryfunc_chunks
     (modeled_buffers : (int * int * string) list)
-    (array_widths : (int, IntSet.t) Hashtbl.t)
     : (int * int) list =
   List.filter_map (fun (start, length, _source) ->
     if length <= 0 then None
-    else begin
-      let e = start + length - 1 in
-      for offset = start to e do
-        Hashtbl.replace array_widths offset (IntSet.singleton 1)
-      done;
-      Some (start, e)
-    end
+    else Some (start, start + length - 1)
   ) modeled_buffers
-
-
-(* 인접 항목 사이에 gap이 있으면 아래쪽 항목을 위쪽 항목의
-   start까지 확장하고, 바이트 단위 배열로 분류한다. *)
-let rec fill_stack_gaps_as_arrays
-    (slots : stack_slot list) : stack_slot list =
-  match slots with
-  | upper :: lower :: rest ->
-      let lower_end =
-        match lower.entry with
-        | Variable -> lower.end_offset
-        | Chunk _ -> lower.end_offset + 1
-      in
-      let lower =
-        if lower_end < upper.start_offset &&
-          not (lower.entry = Chunk ArrayKind && lower.array_width = Some 1) then
-          { lower with
-            end_offset = upper.start_offset - 1;
-            entry = Chunk ArrayKind;
-            fields = [];
-            array_width = Some 4 }
-        else
-          lower
-      in
-      upper :: fill_stack_gaps_as_arrays (lower :: rest)
-  | _ -> slots
 
 (* ===== 출력 함수들 ===== *)
 
 (* [pp_stack_shape slots var_set]
    스택 슬롯 목록을 사람이 읽기 좋은 형태로 출력한다.
-   Variable은 "[end ~ start] : #x주소", Chunk는 종류(kind)를 함께 표시하며,
-   StructKind인 경우 내부 필드(var/array/unknown)도 들여써서 출력한다.
-   chunk의 end_offset은 내부적으로 inclusive이므로, variables와 표기를
-   통일하기 위해 출력 시에만 +1(exclusive)로 보여준다. *)
+   Variable은 "[start] : #x주소", Chunk는 "[end ~ start] : chunk (#x주소)".
+   chunk의 end_offset은 내부적으로 inclusive이므로, 출력 시에만
+   +1(exclusive)로 보여준다. *)
 let pp_stack_shape (slots : stack_slot list) (_var_set : var_set) =
   Format.printf "=== Virtual Stack Shape ===@.";
   List.iter (fun slot ->
@@ -717,124 +264,39 @@ let pp_stack_shape (slots : stack_slot list) (_var_set : var_set) =
     match slot.entry with
     | Variable ->
       Format.printf "  [%d] : %s@." slot.start_offset offset_str
-    | Chunk kind ->
-      let kind_str = match kind with
-        | Unknown -> "chunk"
-        | ArrayKind -> "array"
-        | StructKind -> "struct"
-      in
-      let array_info_str =
-        match kind, slot.array_width with
-        | ArrayKind, Some w ->
-          let size = (slot.end_offset - slot.start_offset + 1) / w in
-          Printf.sprintf " type=%s size=%d" (type_name_of_width w) size
-        | _ -> ""
-      in
-      Format.printf "  [%d ~ %d] : %s (%s)%s@."
-        (slot.end_offset + 1) slot.start_offset kind_str offset_str array_info_str;
-      let var_n = ref 0 and arr_n = ref 0 and unk_n = ref 0 in
-      List.iter (fun f ->
-        match f.fkind with
-        | FieldVar ->
-          incr var_n;
-          let w = Option.value f.fwidth ~default:0 in
-          Format.printf "      var%d   : [%d ~ %d] type=%s width=%d@."
-            !var_n (f.fend + 1) f.fstart (type_name_of_width w) w
-        | FieldArray ->
-          incr arr_n;
-          let w = Option.value f.fwidth ~default:1 in
-          let count = (f.fend - f.fstart + 1) / w in
-          Format.printf "      array%d : [%d ~ %d] type=%s size=%d@."
-            !arr_n (f.fend + 1) f.fstart (type_name_of_width w) count
-        | FieldUnknown ->
-          incr unk_n;
-          Format.printf "      unknown%d : [%d ~ %d]@."
-            !unk_n (f.fend + 1) f.fstart
-      ) slot.fields
+    | Chunk ->
+      Format.printf "  [%d ~ %d] : chunk (%s)@."
+        (slot.end_offset + 1) slot.start_offset offset_str
   ) slots
 
 (* [pp_json slots oc]
-   스택 슬롯 목록을 "variables" / "arrays" / "structs" / "unknown"
-   네 키로 분리해 JSON 형태로 out_channel에 출력한다.
+   스택 슬롯 목록을 "variables" / "chunks" 두 키로 분리해 JSON 형태로
+   out_channel에 출력한다.
    - variables 항목은 offset/start만 담는다. 단독 스칼라 변수는 크기 근거가
      없으므로 end를 출력하지 않는다.
-   - arrays 항목에는 원소 타입(type)과 원소 개수(size)를 함께 담는다.
-   - structs 항목에는 내부 필드(var/array/unknown)를 "fields" 배열로 함께 담고,
-     그 중 array 필드에도 type/size를 함께 담는다.
-   chunk 계열의 end는 내부 inclusive 값에 +1 해서 exclusive로 출력한다. *)
+   - chunks 항목은 offset/start/end만 담는다. end는 내부 inclusive 값에
+     +1 해서 exclusive로 출력한다. *)
 let pp_json (slots : stack_slot list) (oc : out_channel) =
   let fmt = Format.formatter_of_out_channel oc in
 
   let variables = List.filter (fun s -> s.entry = Variable) slots in
-  let chunks_of kind =
-    List.filter (fun s ->
-      match s.entry with Chunk k -> k = kind | _ -> false
-    ) slots
-  in
-  let arrays  = chunks_of ArrayKind in
-  let structs = chunks_of StructKind in
-  let unknown = chunks_of Unknown in
+  let chunks = List.filter (fun s -> s.entry = Chunk) slots in
 
-  (* struct 필드 하나를 JSON 오브젝트 문자열로 변환.
-     fend는 내부적으로 inclusive이므로 +1 해서 exclusive로 출력한다. *)
-  let field_to_json var_n arr_n unk_n f =
-    match f.fkind with
-    | FieldVar ->
-      incr var_n;
-      let w = Option.value f.fwidth ~default:0 in
-      Printf.sprintf
-        "{\"name\": \"var%d\", \"kind\": \"var\", \"offset\": \"%s\", \"start\": %d, \"end\": %d, \"type\": \"%s\", \"width\": %d}"
-        !var_n (offset_to_hex f.fstart) f.fstart (f.fend + 1) (type_name_of_width w) w
-    | FieldArray ->
-      incr arr_n;
-      let w = Option.value f.fwidth ~default:1 in
-      let size = (f.fend - f.fstart + 1) / w in
-      Printf.sprintf
-        "{\"name\": \"array%d\", \"kind\": \"array\", \"offset\": \"%s\", \"start\": %d, \"end\": %d, \"type\": \"%s\", \"size\": %d}"
-        !arr_n (offset_to_hex f.fstart) f.fstart (f.fend + 1) (type_name_of_width w) size
-    | FieldUnknown ->
-      incr unk_n;
-      Printf.sprintf
-        "{\"name\": \"unknown%d\", \"kind\": \"unknown\", \"offset\": \"%s\", \"start\": %d, \"end\": %d}"
-        !unk_n (offset_to_hex f.fstart) f.fstart (f.fend + 1)
-  in
-
-  let print_fields fields =
-    let visible = List.filter (fun f -> f.fkind <> FieldUnknown) fields in
-    let var_n = ref 0 and arr_n = ref 0 and unk_n = ref 0 in
-    let n = List.length visible in
-    Format.fprintf fmt "      \"fields\": [@\n";
-    List.iteri (fun i f ->
-      Format.fprintf fmt "        %s" (field_to_json var_n arr_n unk_n f);
-      if i < n - 1 then Format.fprintf fmt ",";
-      Format.fprintf fmt "@\n"
-    ) visible;
-    Format.fprintf fmt "      ]@\n"
-  in
-
-  let print_list ~last ~with_fields ~with_array_info key items =
+  let print_list ~last key items =
     Format.fprintf fmt "  \"%s\": [@\n" key;
     let n = List.length items in
     List.iteri (fun i slot ->
       Format.fprintf fmt "    {@\n";
-      (* Variable은 offset/start만, Chunk는 inclusive end에 +1 해서 exclusive로 *)
       (match slot.entry with
        | Variable ->
-         Format.fprintf fmt "      \"offset\": \"%s\", \"start\": %d"
+         Format.fprintf fmt "      \"offset\": \"%s\", \"start\": %d@\n"
            (offset_to_hex slot.start_offset)
            slot.start_offset
-       | Chunk _ ->
-         Format.fprintf fmt "      \"offset\": \"%s\", \"start\": %d, \"end\": %d"
+       | Chunk ->
+         Format.fprintf fmt "      \"offset\": \"%s\", \"start\": %d, \"end\": %d@\n"
            (offset_to_hex slot.start_offset)
            slot.start_offset
            (slot.end_offset + 1));
-      (match with_array_info, slot.array_width with
-       | true, Some w ->
-         let size = (slot.end_offset - slot.start_offset + 1) / w in
-         Format.fprintf fmt ", \"type\": \"%s\", \"size\": %d" (type_name_of_width w) size
-       | _ -> ());
-      if with_fields then Format.fprintf fmt ",@\n" else Format.fprintf fmt "@\n";
-      if with_fields then print_fields slot.fields;
       Format.fprintf fmt "    }";
       if i < n - 1 then Format.fprintf fmt ",";
       Format.fprintf fmt "@\n"
@@ -844,12 +306,11 @@ let pp_json (slots : stack_slot list) (oc : out_channel) =
   in
 
   Format.fprintf fmt "{@\n";
-  print_list ~last:false ~with_fields:false ~with_array_info:false "variables" variables;
-  print_list ~last:false ~with_fields:false ~with_array_info:true  "arrays" arrays;
-  print_list ~last:false ~with_fields:true  ~with_array_info:false "structs" structs;
-  print_list ~last:true  ~with_fields:false ~with_array_info:false "unknown" unknown;
+  print_list ~last:false "variables" variables;
+  print_list ~last:true  "chunks" chunks;
   Format.fprintf fmt "}@\n";
   Format.pp_print_flush fmt ()
+
 
 (* [pp_var_set_json var_set oc]
    var_set을 JSON으로 출력한다(output.json 산출용).
