@@ -241,6 +241,12 @@ module AbsAddr = AbsAddr
         | AbsTop, _ | _, AbsTop -> AbsTop
         | AbsInt v1, AbsInt v2 -> AbsInt (AbsInt.BinOp.(v1 >> v2))
         | _ -> failwith "BinOp >> Error")
+      | LShr ->
+        (* 피연산자가 비음수면 lshr = ashr, 음수가 섞이면 결과를 알 수 없으므로 Top *)
+        (match n1, n2 with
+        | AbsBot, _ | _, AbsBot -> AbsBot
+        | AbsInt v1, AbsInt v2 when AbsInt.all_nonneg v1 -> AbsInt (AbsInt.BinOp.(v1 >> v2))
+        | _ -> AbsTop)
       | Shl ->
         (match n1, n2 with
         | AbsBot, _ | _, AbsBot -> AbsBot
@@ -265,7 +271,7 @@ module AbsAddr = AbsAddr
         | AbsTop, _ | _, AbsTop -> AbsTop
         | AbsInt v1, AbsInt v2 -> AbsInt (AbsInt.BinOp.logxor v1 v2)
         | _ -> failwith "BinOp ^ Error")
-      | _ -> AbsBot
+      | _ -> AbsTop
 
     (* i1 결과를 나타내는 상수들. unknown = [0,1] *)
     let abs_true    = AbsInt (AbsInt.alpha Z.one)
