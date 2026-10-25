@@ -217,7 +217,7 @@ let _ =
   let s = Analyzer.analyze entry init_states in
   let _ = Format.printf "first analyze done...@." in
   let s1 = !Analyzer.summary in
-  let _ = Format.printf "%a\n" States.pp_exit s1 in
+  (* let _ = Format.printf "%a\n" States.pp_exit s1 in *)
   (* let _ = Format.printf "ENV \n %a\n" Env.pp !Env.env in
   let _ = Format.printf "%a\n" States.pp s in *)
   

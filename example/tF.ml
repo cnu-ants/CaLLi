@@ -550,8 +550,8 @@ let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
               (* let _ = Format.printf
                 "[inttoptr] skip: infinite interval %s <- %a (bb=%s)@."
                 name AbsValue.pp a stmt.bb_name in *)
-              (* AbsMemory.update addr AbsValue.top mem *)
-            mem
+              AbsMemory.update addr AbsValue.top mem
+            (* mem *)
           | AbsInt i ->
               let addr' = AbsValue.AbsAddr.AddrSet
                 (AbsValue.AbsInt.fold
