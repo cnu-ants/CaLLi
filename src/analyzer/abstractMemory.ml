@@ -22,6 +22,7 @@ module type S =
     val meet : t -> t -> t
     val widen : t -> t -> t
     val pp : Format.formatter -> t -> unit
+    val pp_compact : Format.formatter -> t -> unit
     val equal : t -> t -> bool
     
     val bindings : t -> (string * valty) list
@@ -72,6 +73,23 @@ module Make(AbsVal : AbstractDomain.S) : (S with type valty = AbsVal.t) =
       | Mem mem ->
         F.fprintf fmt "[%a]\n" (F.pp_print_list ~pp_sep:(fun fmt () -> F.fprintf fmt "\n")
           (fun fmt ((s), v) -> F.fprintf fmt " %s ↦ %a" s AbsVal.pp v)) (M.bindings mem)
+
+    (* pp와 동일하되, 키 순서상 연속이고 값이 같은 바인딩을 한 줄로 묶어 출력 *)
+    let pp_compact fmt mem =
+      match mem with
+      | MemBot -> Format.fprintf fmt "bot\n"
+      | Mem mem ->
+        let runs =
+          M.fold (fun k v acc ->
+            match acc with
+            | (k0, _, n, v') :: tl when AbsVal.equal v v' -> (k0, k, n + 1, v') :: tl
+            | _ -> (k, k, 1, v) :: acc) mem []
+          |> List.rev
+        in
+        F.fprintf fmt "[%a]\n" (F.pp_print_list ~pp_sep:(fun fmt () -> F.fprintf fmt "\n")
+          (fun fmt (k0, k1, n, v) ->
+            if n = 1 then F.fprintf fmt " %s ↦ %a" k0 AbsVal.pp v
+            else F.fprintf fmt " %s .. %s (%d) ↦ %a" k0 k1 n AbsVal.pp v)) runs
 
     let find_opt x mem = 
       match mem with

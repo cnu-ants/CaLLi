@@ -21,6 +21,7 @@ module type S =
     val update : Basicblock.t * ctxtty -> memty -> t -> t 
     val pp_ctxtMem : Format.formatter -> memty CtxtM.t -> unit
     val pp : Format.formatter -> t -> unit
+    val pp_compact : Format.formatter -> t -> unit
     val iter : (Basicblock.t -> memty CtxtM.t -> unit) -> t -> unit
     val fold' : (ctxtty -> memty -> 'a -> 'a) -> memty CtxtM.t -> 'a -> 'a
     
@@ -147,6 +148,19 @@ module Make (Ctxt : Context.S) (AbsMem : AbstractMemory.S) : (S with type ctxtty
         (fun fmt ((bb : Basicblock.t), m) -> 
           let _ = Pp.printf ~color:Red "<%s> ↦\n" bb.bb_name in
           F.fprintf fmt "%a\n" pp_ctxtMem m))
+        (M.bindings s)
+
+    (* pp와 동일하되, 각 메모리를 AbsMem.pp_compact로 출력 *)
+    let pp_compact fmt (s : t) =
+      F.fprintf fmt "%a" (F.pp_print_list
+        ~pp_sep:(fun fmt () -> F.fprintf fmt "\n\n")
+        (fun fmt ((bb : Basicblock.t), m) ->
+          let _ = Pp.printf ~color:Red "<%s> ↦\n" bb.bb_name in
+          F.fprintf fmt "[%a]\n" (F.pp_print_list
+            ~pp_sep:(fun fmt () -> F.fprintf fmt "")
+            (fun fmt ((ctxt : Ctxt.t), m) ->
+              F.fprintf fmt "%a ↦\n%a\n" Ctxt.pp ctxt AbsMem.pp_compact m))
+            (CtxtM.bindings m)))
         (M.bindings s)
 
     let pp_exit fmt (s : t) =
