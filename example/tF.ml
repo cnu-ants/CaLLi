@@ -71,7 +71,8 @@ let nprune s (v:AbsValue.t) mem (meta : Metadata.t) =
         | AbsAddr (AddrSet a'') ->
             let mem' = AbsValue.AbsAddr.fold
             (fun a mem ->  
-                let v' = AbsMemory.find a mem in 
+                (* Load와 같은 규칙: 메모리에 없는 주소는 Top으로 본다 *)
+                let v' = match AbsMemory.find_opt a mem with Some v -> v | None -> AbsValue.top in 
                 let v'' = AbsValue.sub v' v in 
                 if AbsValue.(v'' <= AbsValue.bot) then AbsMemory.bot 
                  else AbsMemory.update a v'' mem 
@@ -468,7 +469,8 @@ let rec prune s (v:AbsValue.t) mem (meta : Metadata.t) =
           | AbsAddr (AddrSet a'') ->
             let mem' = AbsValue.AbsAddr.fold
             (fun a mem ->  
-                let v' = AbsMemory.find a mem in 
+                (* Load와 같은 규칙: 메모리에 없는 주소는 Top으로 본다 *)
+                let v' = match AbsMemory.find_opt a mem with Some v -> v | None -> AbsValue.top in 
                 let v'' = AbsValue.meet pruned_v v' in 
                 (* let _ = Format.printf "Pointer fold: addr=%s v'=%a pruned_v=%a meet=%a\n"
     a AbsValue.pp v' AbsValue.pp pruned_v AbsValue.pp v'' in *)
