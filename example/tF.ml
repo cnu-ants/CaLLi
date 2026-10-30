@@ -469,8 +469,14 @@ let rec prune s (v:AbsValue.t) mem (meta : Metadata.t) =
           | AbsAddr (AddrSet a'') ->
             let mem' = AbsValue.AbsAddr.fold
             (fun a mem ->  
+                (* 좁히기 전 변수 값 (load 시점의 칸 값) *)
+                let loaded_v = v' in
                 (* Load와 같은 규칙: 메모리에 없는 주소는 Top으로 본다 *)
                 let v' = match AbsMemory.find_opt a mem with Some v -> v | None -> AbsValue.top in 
+                (* 칸 값이 load한 값과 다르면 load 이후 칸에 store가 있었던 것
+                   (예: while (n--) 의 load n → store n-1 → icmp n).
+                   변수에 대한 조건을 바뀐 칸에 적용하면 안 되므로 칸은 그대로 둔다. *)
+                if not AbsValue.(v' <= loaded_v && loaded_v <= v') then mem else
                 let v'' = AbsValue.meet pruned_v v' in 
                 (* let _ = Format.printf "Pointer fold: addr=%s v'=%a pruned_v=%a meet=%a\n"
     a AbsValue.pp v' AbsValue.pp pruned_v AbsValue.pp v'' in *)
