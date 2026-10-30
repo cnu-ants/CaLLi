@@ -219,7 +219,7 @@ let _ =
   let s1 = !Analyzer.summary in
   (* let _ = Format.printf "%a\n" States.pp_exit s1 in *)
   (* let _ = Format.printf "ENV \n %a\n" Env.pp !Env.env in
-  let _ = Format.printf "%a\n" States.pp s in *)
+  let _ = Format.printf "%a\n" States.pp_compact s in *)
   
   (* Set arg_esp address as 200000*)
   let _ = Analyzer.LoopCounter.reset () in
