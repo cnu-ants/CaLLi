@@ -3,7 +3,7 @@ type t = Integer of {bitwidth:int}
         | Pointer of {ty:t}
         | Vector of {size:int; ty:t}
         | Array of {size:int; ty:t}
-        (* | Structure of {ty:t list} *)
+        | Structure of {ty:t list}
         | Label
         | Void
         | Double
@@ -31,6 +31,9 @@ let rec pp ppf (ty : t) =
   | Pointer {ty} -> Format.fprintf ppf "%a*" pp ty
   | Vector {size; ty} -> Format.fprintf ppf "<%d x %a>" size pp ty
   | Array {size; ty} -> Format.fprintf ppf "[%d x %a]" size pp ty
+  | Structure {ty} ->
+    Format.fprintf ppf "{%a}"
+      (Format.pp_print_list ~pp_sep:(fun fmt () -> Format.fprintf fmt ", ") pp) ty
   | Label -> Format.fprintf ppf "label"
   | Void -> Format.fprintf ppf "void"
   | Double -> Format.fprintf ppf "double"

@@ -44,6 +44,9 @@ let rec transform_lltype lltype =
       let element_ty = transform_lltype (Llvm.element_type lltype) in
       let size = Llvm.array_length lltype in
       Type.Array {size=size; ty=element_ty}
+  | Struct ->
+      let field_tys = Array.to_list (Llvm.struct_element_types lltype) in
+      Type.Structure {ty=List.map transform_lltype field_tys}
   | Void | Half ->  Type.Void
   | _ -> Undef
   in
