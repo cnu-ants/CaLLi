@@ -577,6 +577,29 @@ let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
       in
       mem'
 
+    (* struct phi: 필드마다 incoming의 같은 필드를 join *)
+    | PHI {name; ty = Type.Structure {ty = field_tys}; incoming} ->
+      let (_, mem') =
+        List.fold_left
+          (fun (i, acc) field_ty ->
+            let v =
+              List.fold_left
+                (fun v (value, _) ->
+                  let fv =
+                    match value with
+                    | Expr.Name {name = agg; _} ->
+                      abs_eval (Expr.Name {ty = field_ty; name = agg ^ "#" ^ string_of_int i}) mem
+                    | _ -> AbsValue.top
+                  in
+                  AbsValue.join v fv)
+                AbsValue.bot incoming
+            in
+            let addr = Env.find (name ^ "#" ^ string_of_int i) !Env.env in
+            (i + 1, AbsMemory.update addr v acc))
+          (0, mem) field_tys
+      in
+      mem'
+
     | PHI {name; incoming; _} ->
       let result =
         List.fold_left
@@ -634,6 +657,17 @@ let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
       let mem'' = nprune cond v mem func.metadata in
       mem''
 
+    (* struct를 반환하는 호출: 반환값을 추적하지 않으므로 모든 필드 top *)
+    | ReturnSite {name; ty = Type.Structure {ty = field_tys}} ->
+      let (_, mem') =
+        List.fold_left
+          (fun (i, acc) _ ->
+            let addr = Env.find (name ^ "#" ^ string_of_int i) !Env.env in
+            (i + 1, AbsMemory.update addr AbsValue.top acc))
+          (0, mem) field_tys
+      in
+      mem'
+
     | ReturnSite {name; ty} ->
       let res = abs_eval (Expr.Name {ty=ty; name=ret_addr}) mem in
       let addr = Env.find name !Env.env in
@@ -659,6 +693,44 @@ let abs_interp_stmt (stmt : Stmt.t) (mem: AbsMemory.t) : AbsMemory.t =
         | _ -> AbsValue.top
       in
       AbsMemory.update addr res mem
+
+    (* X = insertvalue A, v, i : X#i <- v, 나머지 X#j <- A#j
+       A가 undef이면 빈 칸(bot), 모르는 aggregate면 top.
+       다중 인덱스(중첩 필드)와 struct 안의 struct는 추적하지 않음(top). *)
+    | InsertValue {name; ty = Type.Structure {ty = field_tys}; aggregate; value; indices} ->
+      let field_val i field_ty =
+        match indices with
+        | [idx] when i = idx ->
+          (match field_ty with
+          | Type.Structure _ -> AbsValue.top
+          | _ -> abs_eval value mem)
+        | [_] ->
+          (match aggregate with
+          | Expr.Undef -> AbsValue.bot
+          | Expr.Name {name = agg; _} ->
+            abs_eval (Expr.Name {ty = field_ty; name = agg ^ "#" ^ string_of_int i}) mem
+          | _ -> AbsValue.top)
+        | _ -> AbsValue.top
+      in
+      let (_, mem') =
+        List.fold_left
+          (fun (i, acc) field_ty ->
+            let addr = Env.find (name ^ "#" ^ string_of_int i) !Env.env in
+            (i + 1, AbsMemory.update addr (field_val i field_ty) acc))
+          (0, mem) field_tys
+      in
+      mem'
+
+    (* y = extractvalue A, i : y <- A#i. 다중 인덱스나 모르는 aggregate는 top *)
+    | ExtractValue {name; ty; aggregate; indices} ->
+      let v =
+        match indices, aggregate with
+        | [idx], Expr.Name {name = agg; _} ->
+          abs_eval (Expr.Name {ty; name = agg ^ "#" ^ string_of_int idx}) mem
+        | _ -> AbsValue.top
+      in
+      let addr = Env.find name !Env.env in
+      AbsMemory.update addr v mem
 
     | _ -> mem
 

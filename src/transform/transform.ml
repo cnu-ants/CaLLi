@@ -199,6 +199,21 @@ let transform_instr instr func_name: Inst.t =
                               transform_e (Llvm.value_of_block bb) func_name)
                         )
                         (Llvm.incoming instr)}
+  | Llvm.Opcode.InsertValue ->
+                        let agg = Llvm.operand instr 0 in
+                        Inst.InsertValue
+                        {name=(func_name^(get_name instr));
+                        ty=transform_expr_type instr;
+                        (* undef aggregate(빈 상자)는 Expr.Undef로 받아 전이 함수에서 필드별 bot으로 처리 *)
+                        aggregate=(if Llvm.classify_value agg = Llvm.ValueKind.UndefValue
+                                   then Expr.Undef else transform_e agg func_name);
+                        value=transform_e (Llvm.operand instr 1) func_name;
+                        indices=Array.to_list (Llvm.indices instr)}
+  | Llvm.Opcode.ExtractValue -> Inst.ExtractValue
+                        {name=(func_name^(get_name instr));
+                        ty=transform_expr_type instr;
+                        aggregate=transform_e (Llvm.operand instr 0) func_name;
+                        indices=Array.to_list (Llvm.indices instr)}
   | _ -> Inst.Other
   in
   res
@@ -335,7 +350,9 @@ let def_of_inst (inst : Inst.t) : (string * Type.t) option =
   | Inst.Sext {name; ty; _}
   | Inst.Zext {name; ty; _}
   | Inst.Trunc {name; ty; _}
-  | Inst.PHI {name; ty; _} ->
+  | Inst.PHI {name; ty; _}
+  | Inst.InsertValue {name; ty; _}
+  | Inst.ExtractValue {name; ty; _} ->
       if name = "" || ty = Type.Void then None else Some (name, ty)
 
   | Inst.Store _
@@ -351,9 +368,26 @@ let collect_local_vars llf func_name : Expr.t list =
         let bb = transform_bb llbb func_name in
         List.fold_left
           (fun (seen, vars) (stmt : Stmt.t) ->
-            match def_of_inst stmt.inst with
-            | Some (name, ty) -> add_local_var seen vars name ty
-            | None -> (seen, vars))
+            match def_of_inst stmt.inst, stmt.inst with
+            (* struct 값은 이름 자체가 아니라 필드 변수(name#i)로 등록한다.
+               전이 함수가 필드를 채우는 정의(insertvalue, struct phi, struct 반환 호출)만. *)
+            | Some (name, Type.Structure {ty = field_tys}),
+              (Inst.InsertValue _ | Inst.PHI _ | Inst.Call _) ->
+                let (seen, vars, _) =
+                  List.fold_left
+                    (fun (seen, vars, i) field_ty ->
+                      let (seen, vars) =
+                        add_local_var seen vars (name ^ "#" ^ string_of_int i) field_ty in
+                      (seen, vars, i + 1))
+                    (seen, vars, 0) field_tys
+                in
+                (seen, vars)
+            (* 그 밖의 struct 정의, array aggregate의 insertvalue는 전이 함수가 없으므로
+               등록하지 않는다 (읽으면 top) *)
+            | Some (_, Type.Structure _), _
+            | Some _, Inst.InsertValue _ -> (seen, vars)
+            | Some (name, ty), _ -> add_local_var seen vars name ty
+            | None, _ -> (seen, vars))
           (seen, vars)
           bb.stmts)
       (StringSet.empty, [])

@@ -322,7 +322,9 @@ let pp_var_set_json (var_set : var_set) (oc : out_channel) =
   let extract_var_name key =
     try
       let idx = String.rindex key '%' in
-      Some (String.sub key idx (String.length key - idx))
+      let v = String.sub key idx (String.length key - idx) in
+      (* struct 필드 변수(%x#i)는 IR에 없는 이름이므로 출력하지 않는다 *)
+      if String.contains v '#' then None else Some v
     with Not_found -> None
   in
 

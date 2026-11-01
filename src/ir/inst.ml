@@ -19,6 +19,8 @@ type t = BinaryOp of {name:string; op:Op.t; operand0:Expr.t; operand1:Expr.t; ty
             | NPrune of {cond:string; value:Expr.t list}
             | Trunc of {name:string; operand:Expr.t; ty:Type.t}
             | PHI of {name:string; ty:Type.t; incoming: (Expr.t * Expr.t) list}
+            | InsertValue of {name:string; ty:Type.t; aggregate:Expr.t; value:Expr.t; indices:int list}
+            | ExtractValue of {name:string; ty:Type.t; aggregate:Expr.t; indices:int list}
             | Other
 
 let pp ppf (inst:t) =
@@ -66,5 +68,11 @@ let pp ppf (inst:t) =
         ~pp_sep:(fun fmt () -> Format.fprintf fmt ", ")
         (fun fmt (value, label) -> Format.fprintf fmt "%a, %a" Expr.pp value Expr.pp label))
     incoming
+  | InsertValue {name; aggregate; value; indices; _} ->
+      Format.fprintf ppf "%s = insertvalue %a, %a, %s" name Expr.pp aggregate Expr.pp value
+        (String.concat ", " (List.map string_of_int indices))
+  | ExtractValue {name; aggregate; indices; _} ->
+      Format.fprintf ppf "%s = extractvalue %a, %s" name Expr.pp aggregate
+        (String.concat ", " (List.map string_of_int indices))
   | Other -> Format.fprintf ppf "Other"
 

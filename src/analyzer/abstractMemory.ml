@@ -231,7 +231,9 @@ module Make(AbsVal : AbstractDomain.S) : (S with type valty = AbsVal.t) =
     let extract_var_name (key : string) : string option =
       try
         let idx = String.rindex key '%' in
-        Some (String.sub key idx (String.length key - idx))
+        let v = String.sub key idx (String.length key - idx) in
+        (* struct 필드 변수(%x#i)는 IR에 없는 이름이므로 출력하지 않는다 *)
+        if String.contains v '#' then None else Some v
       with Not_found -> None  (* '%' 없으면 None *)
     
     let pp_grouped_json_with_env fmt (mem : t) (env : string Env.M.t) =
