@@ -938,19 +938,25 @@ let model_memset (args : Expr.t list) (mem : AbsMemory.t) : AbsMemory.t =
   | buf_e :: n_e :: _ ->
       let buf = abs_eval buf_e mem in
       let n = abs_eval n_e mem in
-      (match buf, n with
-       | AbsValue.AbsAddr a, AbsValue.AbsInt size
-         when AbsValue.AbsAddr.is_singleton a ->
-           (match int_of_string_opt (AbsValue.AbsAddr.min_elt a),
-                  AbsInterval.singleton_value size with
-            | Some base_int, Some z when Z.fits_int z ->
-                let n_int = Z.to_int z in
-                if n_int > 0 then (
-                  let start_offset = base_int - !tmp_addr in
-                  let end_offset = start_offset + n_int - 1 in
-                  add_chunk start_offset end_offset;
-                  add_bulk_range start_offset end_offset
-                );
+      (* lift된 선언(fgets_unlocked: i32 인자)이면 buf가 inttoptr 전이라 AbsInt *)
+      let base_opt =
+        match buf with
+        | AbsValue.AbsAddr a when AbsValue.AbsAddr.is_singleton a ->
+            int_of_string_opt (AbsValue.AbsAddr.min_elt a)
+        | AbsValue.AbsInt i ->
+            (match AbsInterval.singleton_value i with
+             | Some z when Z.fits_int z -> Some (Z.to_int z)
+             | _ -> None)
+        | _ -> None
+      in
+      (match base_opt, n with
+       | Some base_int, AbsValue.AbsInt size ->
+           (match AbsInterval.singleton_value size with
+            | Some z when Z.fits_int z && Z.to_int z > 0 ->
+                let start_offset = base_int - !tmp_addr in
+                let end_offset = start_offset + Z.to_int z - 1 in
+                add_chunk start_offset end_offset;
+                add_bulk_range start_offset end_offset;
                 mem
             | _ -> mem)
        | _ -> mem)
