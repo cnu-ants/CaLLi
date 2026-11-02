@@ -164,6 +164,40 @@ let detect_loop_chunks
   !results
 
 
+(* [detect_wide_access_chunks target_f var_set]
+   load/store 접근 폭이 변수 칸(4바이트)보다 크면(예: double = i64)
+   그 포인터의 offset부터 폭만큼을 chunk로 반환한다. *)
+let detect_wide_access_chunks
+    (target_f : Function.t)
+    (var_set : var_set)
+    : (int * int) list =
+  let var_names = build_var_names var_set in
+  let results = ref [] in
+  let bytes = function
+    | Type.Integer {bitwidth} -> bitwidth / 8
+    | Type.Double -> 8
+    | _ -> 0
+  in
+  let add ptr_name width =
+    if width > 4 then
+      match Option.bind (Hashtbl.find_opt var_names ptr_name) addr_to_offset with
+      | Some o ->
+        let chunk = (o, o + width - 1) in
+        if not (List.mem chunk !results) then results := chunk :: !results
+      | None -> ()
+  in
+  Cfg.iter_from_entry (fun bb_name ->
+    let bb = Bbpool.find bb_name !Bbpool.pool in
+    List.iter (fun (stmt : Stmt.t) ->
+      match stmt.inst with
+      | Load {operand = Expr.Name {name; _}; ty; _} -> add name (bytes ty)
+      | Store {name; ty = Type.Pointer {ty}; _} -> add name (bytes ty)
+      | _ -> ()
+    ) bb.stmts
+  ) target_f.entry target_f.cfg;
+  !results
+
+
 (* [extend_loop_chunk_ends loop_chunks var_set other_chunks]
    loop 기반 chunk는 인덱스 접근 범위(base ~ base+hi)까지만 근거가 있고,
    base+hi는 마지막 원소가 "시작"하는 offset이다. 원소 폭(타입)은 쓰지 않고,
