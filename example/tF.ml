@@ -929,6 +929,33 @@ let model_memset (args : Expr.t list) (mem : AbsMemory.t) : AbsMemory.t =
        | _ -> mem)
   | _ -> mem
 
+(* fgets(buf, size, fp): buf부터 최대 size바이트('\0' 포함)를 쓴다.
+   호출자는 buf에 size바이트 이상을 보장해야 하므로 [buf, buf+size)를 chunk로 기록.
+   쓰는 내용은 문자열이라 메모리는 memcpy와 같이 건드리지 않는다.
+   memcpy와 인자 위치만 다르다 (버퍼 arg0, 크기 arg1). *)
+  let model_fgets (args : Expr.t list) (mem : AbsMemory.t) : AbsMemory.t =
+  match args with
+  | buf_e :: n_e :: _ ->
+      let buf = abs_eval buf_e mem in
+      let n = abs_eval n_e mem in
+      (match buf, n with
+       | AbsValue.AbsAddr a, AbsValue.AbsInt size
+         when AbsValue.AbsAddr.is_singleton a ->
+           (match int_of_string_opt (AbsValue.AbsAddr.min_elt a),
+                  AbsInterval.singleton_value size with
+            | Some base_int, Some z when Z.fits_int z ->
+                let n_int = Z.to_int z in
+                if n_int > 0 then (
+                  let start_offset = base_int - !tmp_addr in
+                  let end_offset = start_offset + n_int - 1 in
+                  add_chunk start_offset end_offset;
+                  add_bulk_range start_offset end_offset
+                );
+                mem
+            | _ -> mem)
+       | _ -> mem)
+  | _ -> mem
+
 (* bb_name 끝에서부터 '#'로 나눈 뒤, 뒤에서부터 처음 나오는 숫자 조각을 찾는다.
    "...#entry#3"      -> 3
    "...#entry"        -> 0  (숫자 접미사가 없으면 0)
@@ -1055,6 +1082,7 @@ let abs_interp_term' (bb_name: string) (term : Term.t) (mem : AbsMemory.t) =
       let mem = AbsMemory.update ret_addr AbsValue.top mem in
       if contains_substring callee "memset" then model_memset args mem
       else if contains_substring callee "memcpy" then model_memcpy args mem
+      else if contains_substring callee "fgets" then model_fgets args mem (* fgets, fgets_unlocked *)
       else if contains_substring callee "malloc" then model_malloc bb_name args mem 
       else if contains_substring callee "calloc" then model_calloc bb_name args mem 
       (* else if contains_substring callee "realloc" then model_realloc bb_name name mem *)
