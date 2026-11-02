@@ -962,6 +962,39 @@ let model_memset (args : Expr.t list) (mem : AbsMemory.t) : AbsMemory.t =
        | _ -> mem)
   | _ -> mem
 
+(* getloadavg(loadavg, nelem): loadavg[0..nelem)에 double을 쓴다 (nelem * 8바이트).
+   buf가 단일 주소이고 nelem이 단일 상수이면 [buf, buf + nelem*8)를 chunk로 기록.
+   상수 index로만 읽는 배열(avg[0], avg[1], avg[2])은 접근만으로는 double 세 개와
+   구분되지 않으므로 이 계약으로 한 덩어리임을 알린다. 메모리는 건드리지 않는다.
+   fgets와 같은 구조, 크기만 nelem * sizeof(double). *)
+  let model_getloadavg (args : Expr.t list) (mem : AbsMemory.t) : AbsMemory.t =
+  match args with
+  | buf_e :: n_e :: _ ->
+      let buf = abs_eval buf_e mem in
+      let n = abs_eval n_e mem in
+      let base_opt =
+        match buf with
+        | AbsValue.AbsAddr a when AbsValue.AbsAddr.is_singleton a ->
+            int_of_string_opt (AbsValue.AbsAddr.min_elt a)
+        | AbsValue.AbsInt i ->
+            (match AbsInterval.singleton_value i with
+             | Some z when Z.fits_int z -> Some (Z.to_int z)
+             | _ -> None)
+        | _ -> None
+      in
+      (match base_opt, n with
+       | Some base_int, AbsValue.AbsInt nelem ->
+           (match AbsInterval.singleton_value nelem with
+            | Some z when Z.fits_int z && Z.to_int z > 0 ->
+                let start_offset = base_int - !tmp_addr in
+                let end_offset = start_offset + Z.to_int z * 8 - 1 in
+                add_chunk start_offset end_offset;
+                add_bulk_range start_offset end_offset;
+                mem
+            | _ -> mem)
+       | _ -> mem)
+  | _ -> mem
+
 (* bb_name 끝에서부터 '#'로 나눈 뒤, 뒤에서부터 처음 나오는 숫자 조각을 찾는다.
    "...#entry#3"      -> 3
    "...#entry"        -> 0  (숫자 접미사가 없으면 0)
@@ -1089,6 +1122,7 @@ let abs_interp_term' (bb_name: string) (term : Term.t) (mem : AbsMemory.t) =
       if contains_substring callee "memset" then model_memset args mem
       else if contains_substring callee "memcpy" then model_memcpy args mem
       else if contains_substring callee "fgets" then model_fgets args mem (* fgets, fgets_unlocked *)
+      else if contains_substring callee "getloadavg" then model_getloadavg args mem
       else if contains_substring callee "malloc" then model_malloc bb_name args mem 
       else if contains_substring callee "calloc" then model_calloc bb_name args mem 
       (* else if contains_substring callee "realloc" then model_realloc bb_name name mem *)
