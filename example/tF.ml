@@ -995,6 +995,35 @@ let model_memset (args : Expr.t list) (mem : AbsMemory.t) : AbsMemory.t =
        | _ -> mem)
   | _ -> mem
 
+(* __lxstat64 / __xstat64 / __fxstat64 (ver, path|fd, buf):
+   buf에 struct stat64 전체(i386 96바이트)를 쓴다 (lstat64/stat64/fstat64의 glibc 내부 이름).
+   크기는 인자가 아니라 구조체 크기(타깃 ABI 고정)라 상수로 둔다.
+   buf가 단일 주소이면 [buf, buf+96)을 chunk로 기록. 메모리는 건드리지 않는다.
+   getloadavg와 같은 구조, 버퍼가 arg2이고 크기가 상수. *)
+  let model_stat64 (args : Expr.t list) (mem : AbsMemory.t) : AbsMemory.t =
+  match args with
+  | _ :: _ :: buf_e :: _ ->
+      let buf = abs_eval buf_e mem in
+      let base_opt =
+        match buf with
+        | AbsValue.AbsAddr a when AbsValue.AbsAddr.is_singleton a ->
+            int_of_string_opt (AbsValue.AbsAddr.min_elt a)
+        | AbsValue.AbsInt i ->
+            (match AbsInterval.singleton_value i with
+             | Some z when Z.fits_int z -> Some (Z.to_int z)
+             | _ -> None)
+        | _ -> None
+      in
+      (match base_opt with
+       | Some base_int ->
+           let start_offset = base_int - !tmp_addr in
+           let end_offset = start_offset + 96 - 1 in
+           add_chunk start_offset end_offset;
+           add_bulk_range start_offset end_offset;
+           mem
+       | None -> mem)
+  | _ -> mem
+
 (* bb_name 끝에서부터 '#'로 나눈 뒤, 뒤에서부터 처음 나오는 숫자 조각을 찾는다.
    "...#entry#3"      -> 3
    "...#entry"        -> 0  (숫자 접미사가 없으면 0)
@@ -1123,6 +1152,9 @@ let abs_interp_term' (bb_name: string) (term : Term.t) (mem : AbsMemory.t) =
       else if contains_substring callee "memcpy" then model_memcpy args mem
       else if contains_substring callee "fgets" then model_fgets args mem (* fgets, fgets_unlocked *)
       else if contains_substring callee "getloadavg" then model_getloadavg args mem
+      else if contains_substring callee "__lxstat64"
+           || contains_substring callee "__xstat64"
+           || contains_substring callee "__fxstat64" then model_stat64 args mem
       else if contains_substring callee "malloc" then model_malloc bb_name args mem 
       else if contains_substring callee "calloc" then model_calloc bb_name args mem 
       (* else if contains_substring callee "realloc" then model_realloc bb_name name mem *)
