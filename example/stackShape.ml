@@ -198,6 +198,56 @@ let detect_wide_access_chunks
   !results
 
 
+(* [detect_unbounded_ptr_chunks target_f var_set mem]
+   load/store 포인터가 inttoptr x이고, x 값이 [lo, MaxInf]
+   (widening으로 상한이 무한, 예: 루프 안 out++)이며 lo가 var_set의 스택 주소이면
+   (lo, lo)를 반환한다. 끝은 extend_loop_chunk_ends가 다음 경계 직전까지 늘린다.
+   상한이 유한한 구간(주소 join 등)은 대상이 아니다. *)
+let detect_unbounded_ptr_chunks
+    (target_f : Function.t)
+    (var_set : var_set)
+    (mem : AbsMemory.t)
+    : (int * int) list =
+  (* inttoptr 결과 이름 -> 입력 정수 이름 *)
+  let itp_operand = Hashtbl.create 100 in
+  Cfg.iter_from_entry (fun bb_name ->
+    let bb = Bbpool.find bb_name !Bbpool.pool in
+    List.iter (fun (stmt : Stmt.t) ->
+      match stmt.inst with
+      | IntToPtr {name; operand = Expr.Name {name = x; _}; _} ->
+        Hashtbl.replace itp_operand name x
+      | _ -> ()
+    ) bb.stmts
+  ) target_f.entry target_f.cfg;
+  let results = ref [] in
+  let add ptr_name =
+    match Hashtbl.find_opt itp_operand ptr_name with
+    | None -> ()
+    | Some x ->
+      (try
+        match AbsMemory.find (Env.find x !Env.env) mem with
+        | AbsValue.AbsInt (AbsInterval.IntInterval {
+            min = AbsInterval.I lo; max = AbsInterval.MaxInf}) ->
+          let lo_str = Z.to_string lo in
+          if List.exists (fun (a, _) -> a = lo_str) var_set then
+            (match addr_to_offset lo_str with
+             | Some o ->
+               if not (List.mem (o, o) !results) then results := (o, o) :: !results
+             | None -> ())
+        | _ -> ()
+      with _ -> ())
+  in
+  Cfg.iter_from_entry (fun bb_name ->
+    let bb = Bbpool.find bb_name !Bbpool.pool in
+    List.iter (fun (stmt : Stmt.t) ->
+      match stmt.inst with
+      | Load {operand = Expr.Name {name; _}; _} -> add name
+      | Store {name; _} -> add name
+      | _ -> ()
+    ) bb.stmts
+  ) target_f.entry target_f.cfg;
+  !results
+
 (* [extend_loop_chunk_ends loop_chunks var_set other_chunks]
    loop 기반 chunk는 인덱스 접근 범위(base ~ base+hi)까지만 근거가 있고,
    base+hi는 마지막 원소가 "시작"하는 offset이다. 원소 폭(타입)은 쓰지 않고,

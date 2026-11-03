@@ -252,6 +252,9 @@ let _ =
   (* 넓은 접근 덩어리: 접근 폭이 변수 칸(4바이트)보다 큰 load/store (예: double = i64) *)
   let wide_chunks = StackShape.detect_wide_access_chunks target_f var_set in
 
+  (* 상한 없는 포인터 덩어리: inttoptr 입력이 [lo, MaxInf]인 load/store (예: 루프 안 out++) *)
+  let unbounded_chunks = StackShape.detect_unbounded_ptr_chunks target_f var_set s1_exit_mem in
+
   (* 라이브러리 함수 모델링이 알려준 버퍼: 크기를 정확히 아는 덩어리 *)
   let modeled_buffers = load_modeled_buffers "library_models.json" in
   let lib_chunks = StackShape.add_libraryfunc_chunks modeled_buffers in
@@ -261,11 +264,12 @@ let _ =
   let _ = List.iter (fun (s, e) -> Format.printf "  [%d ~ %d] loop@." s e) loop_chunks in
   let _ = List.iter (fun (s, e) -> Format.printf "  [%d ~ %d] lib@." s e) lib_chunks in
   let _ = List.iter (fun (s, e) -> Format.printf "  [%d ~ %d] wide@." s e) wide_chunks in
+  let _ = List.iter (fun (s, e) -> Format.printf "  [%d ~ %d] unbounded@." s e) unbounded_chunks in
 
   (* loop chunk의 end만 위쪽 다음 offset 바로 앞까지 늘린다.
      memset/memcpy/라이브러리 chunk는 크기를 알므로 그대로 둔다. *)
   let loop_chunks =
-    StackShape.extend_loop_chunk_ends loop_chunks var_set (!TF.chunks @ lib_chunks) in
+    StackShape.extend_loop_chunk_ends (loop_chunks @ unbounded_chunks) var_set (!TF.chunks @ lib_chunks) in
   let _ = List.iter (fun (s, e) -> TF.add_chunk s e) (loop_chunks @ lib_chunks @ wide_chunks) in
 
   (* memset/memcpy/loop/라이브러리 chunk를 병합 *)
