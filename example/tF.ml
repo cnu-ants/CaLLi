@@ -1024,6 +1024,41 @@ let model_memset (args : Expr.t list) (mem : AbsMemory.t) : AbsMemory.t =
        | None -> mem)
   | _ -> mem
 
+(* fread / fread_unlocked (ptr, size, nmemb, fp): ptr에 최대 size*nmemb바이트를 쓴다.
+   호출자는 ptr에 그만큼을 보장해야 하므로 ptr이 단일 주소이고 size, nmemb가
+   단일 상수이면 [ptr, ptr + size*nmemb)를 chunk로 기록. 메모리는 건드리지 않는다.
+   fgets와 같은 구조, 크기만 arg1 * arg2. *)
+  let model_fread (args : Expr.t list) (mem : AbsMemory.t) : AbsMemory.t =
+  match args with
+  | buf_e :: size_e :: n_e :: _ ->
+      let buf = abs_eval buf_e mem in
+      let size = abs_eval size_e mem in
+      let n = abs_eval n_e mem in
+      let base_opt =
+        match buf with
+        | AbsValue.AbsAddr a when AbsValue.AbsAddr.is_singleton a ->
+            int_of_string_opt (AbsValue.AbsAddr.min_elt a)
+        | AbsValue.AbsInt i ->
+            (match AbsInterval.singleton_value i with
+             | Some z when Z.fits_int z -> Some (Z.to_int z)
+             | _ -> None)
+        | _ -> None
+      in
+      (match base_opt, size, n with
+       | Some base_int, AbsValue.AbsInt s, AbsValue.AbsInt c ->
+           (match AbsInterval.singleton_value s, AbsInterval.singleton_value c with
+            | Some zs, Some zc
+              when Z.fits_int zs && Z.fits_int zc
+                   && Z.to_int zs > 0 && Z.to_int zc > 0 ->
+                let start_offset = base_int - !tmp_addr in
+                let end_offset = start_offset + Z.to_int zs * Z.to_int zc - 1 in
+                add_chunk start_offset end_offset;
+                add_bulk_range start_offset end_offset;
+                mem
+            | _ -> mem)
+       | _ -> mem)
+  | _ -> mem
+
 (* bb_name 끝에서부터 '#'로 나눈 뒤, 뒤에서부터 처음 나오는 숫자 조각을 찾는다.
    "...#entry#3"      -> 3
    "...#entry"        -> 0  (숫자 접미사가 없으면 0)
@@ -1155,6 +1190,9 @@ let abs_interp_term' (bb_name: string) (term : Term.t) (mem : AbsMemory.t) =
       else if contains_substring callee "__lxstat64"
            || contains_substring callee "__xstat64"
            || contains_substring callee "__fxstat64" then model_stat64 args mem
+      (* "fread(" / "fread_unlocked(": callee 문자열은 "이름(시그니처)" 형태. __freading 제외 *)
+      else if contains_substring callee "fread("
+           || contains_substring callee "fread_unlocked(" then model_fread args mem
       else if contains_substring callee "malloc" then model_malloc bb_name args mem 
       else if contains_substring callee "calloc" then model_calloc bb_name args mem 
       (* else if contains_substring callee "realloc" then model_realloc bb_name name mem *)
