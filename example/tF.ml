@@ -1059,6 +1059,34 @@ let model_memset (args : Expr.t list) (mem : AbsMemory.t) : AbsMemory.t =
        | _ -> mem)
   | _ -> mem
 
+(* uname (buf): buf에 struct utsname 전체(i386 glibc 390바이트 = 6 필드 x 65)를 쓴다.
+   크기는 인자가 아니라 구조체 크기(타깃 ABI 고정)라 상수로 둔다.
+   buf가 단일 주소이면 [buf, buf+390)을 chunk로 기록. 메모리는 건드리지 않는다.
+   stat64와 같은 구조, 버퍼가 arg0. *)
+  let model_uname (args : Expr.t list) (mem : AbsMemory.t) : AbsMemory.t =
+  match args with
+  | buf_e :: _ ->
+      let buf = abs_eval buf_e mem in
+      let base_opt =
+        match buf with
+        | AbsValue.AbsAddr a when AbsValue.AbsAddr.is_singleton a ->
+            int_of_string_opt (AbsValue.AbsAddr.min_elt a)
+        | AbsValue.AbsInt i ->
+            (match AbsInterval.singleton_value i with
+             | Some z when Z.fits_int z -> Some (Z.to_int z)
+             | _ -> None)
+        | _ -> None
+      in
+      (match base_opt with
+       | Some base_int ->
+           let start_offset = base_int - !tmp_addr in
+           let end_offset = start_offset + 390 - 1 in
+           add_chunk start_offset end_offset;
+           add_bulk_range start_offset end_offset;
+           mem
+       | None -> mem)
+  | _ -> mem
+
 (* bb_name 끝에서부터 '#'로 나눈 뒤, 뒤에서부터 처음 나오는 숫자 조각을 찾는다.
    "...#entry#3"      -> 3
    "...#entry"        -> 0  (숫자 접미사가 없으면 0)
@@ -1193,6 +1221,7 @@ let abs_interp_term' (bb_name: string) (term : Term.t) (mem : AbsMemory.t) =
       (* "fread(" / "fread_unlocked(": callee 문자열은 "이름(시그니처)" 형태. __freading 제외 *)
       else if contains_substring callee "fread("
            || contains_substring callee "fread_unlocked(" then model_fread args mem
+      else if contains_substring callee "uname(" then model_uname args mem
       else if contains_substring callee "malloc" then model_malloc bb_name args mem 
       else if contains_substring callee "calloc" then model_calloc bb_name args mem 
       (* else if contains_substring callee "realloc" then model_realloc bb_name name mem *)
