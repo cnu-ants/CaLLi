@@ -285,6 +285,54 @@ let merge_chunks (chunks : (int * int) list) : (int * int) list =
     ~merge_two:(fun (a_s, a_e) (b_s, b_e) -> (min a_s b_s, max a_e b_e))
     chunks
 
+(* [extend_chunks_by_var_width target_f var_set chunks]
+   start가 chunk 안에 있는 변수의 실제 접근 폭(load/store 타입)이 chunk 끝을
+   넘으면 chunk 끝을 (start + 폭 - 1)까지 늘린다.
+   (예: chunk [-40, -21]에 -22 i32 접근 → [-40, -19])
+   늘어난 범위에 새로 들어온 변수도 같은 방식으로 보고, 늘어난 chunk끼리
+   포개지면 merge_chunks로 병합한다. 변화가 없을 때까지 반복한다.
+   같은 offset의 접근이 여러 개면 가장 큰 폭을 쓴다.
+   폭: iN -> N/8(i1은 1), double 8, float/포인터 4 (i386). *)
+let extend_chunks_by_var_width
+    (target_f : Function.t)
+    (var_set : var_set)
+    (chunks : (int * int) list)
+    : (int * int) list =
+  let var_names = build_var_names var_set in
+  let bytes = function
+    | Type.Integer {bitwidth} -> (bitwidth + 7) / 8
+    | Type.Double -> 8
+    | Type.Float | Type.Pointer _ -> 4
+    | _ -> 0
+  in
+  (* offset -> 최대 접근 폭 *)
+  let width = Hashtbl.create 100 in
+  let add ptr_name w =
+    match Option.bind (Hashtbl.find_opt var_names ptr_name) addr_to_offset with
+    | Some o ->
+      let prev = Option.value (Hashtbl.find_opt width o) ~default:0 in
+      if w > prev then Hashtbl.replace width o w
+    | None -> ()
+  in
+  Cfg.iter_from_entry (fun bb_name ->
+    let bb = Bbpool.find bb_name !Bbpool.pool in
+    List.iter (fun (stmt : Stmt.t) ->
+      match stmt.inst with
+      | Load {operand = Expr.Name {name; _}; ty; _} -> add name (bytes ty)
+      | Store {name; ty = Type.Pointer {ty}; _} -> add name (bytes ty)
+      | _ -> ()
+    ) bb.stmts
+  ) target_f.entry target_f.cfg;
+  let extend (s, e) =
+    (s, Hashtbl.fold (fun o w acc ->
+           if s <= o && o <= e then max acc (o + w - 1) else acc) width e)
+  in
+  let rec fix chunks =
+    let next = merge_chunks (List.map extend chunks) in
+    if next = chunks then chunks else fix next
+  in
+  fix chunks
+
 (* [build_stack_shape var_set chunks]
    var_set과 chunks(병합된 덩어리 범위)로부터 전체 stack_slot 리스트를 구성한다.
    - chunks 범위는 Chunk 슬롯으로.

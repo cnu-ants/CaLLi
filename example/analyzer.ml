@@ -274,6 +274,8 @@ let _ =
 
   (* memset/memcpy/loop/라이브러리 chunk를 병합 *)
   let merged_chunks = StackShape.merge_chunks !TF.chunks in
+  (* start가 chunk 안인 변수의 접근 폭이 chunk 끝을 넘으면 끝을 늘린다 (연쇄, 재병합) *)
+  let merged_chunks = StackShape.extend_chunks_by_var_width target_f var_set merged_chunks in
   let _ = Format.printf "=== Merged Chunks ===@." in
   let _ = List.iter (fun (s, e) ->
     Format.printf "  [%d ~ %d]@." s e) merged_chunks in
