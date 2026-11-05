@@ -52,10 +52,10 @@ let build_var_names (var_set : var_set) : (string, string) Hashtbl.t =
   ) var_set;
   tbl
 
-(* [interval_hi_of_expr idx_expr mem]
+(* [interval_of_expr idx_expr mem]
    idx_expr가 Name이고 그 추상값이 singleton이 아닌 IntInterval이면
-   상한(hi)을 int로 반환, 아니면 None. *)
-let interval_hi_of_expr (idx_expr : Expr.t) (mem : AbsMemory.t) : int option =
+   (하한 lo, 상한 hi)를 int로 반환, 아니면 None. *)
+let interval_of_expr (idx_expr : Expr.t) (mem : AbsMemory.t) : (int * int) option =
   match idx_expr with
   | Expr.Name {name; _} ->
     (try
@@ -64,7 +64,7 @@ let interval_hi_of_expr (idx_expr : Expr.t) (mem : AbsMemory.t) : int option =
       | AbsValue.AbsInt (AbsInterval.IntInterval {
           min = AbsInterval.I lo;
           max = AbsInterval.I hi})
-        when not (Z.equal lo hi) -> Some (Z.to_int hi)
+        when not (Z.equal lo hi) -> Some (Z.to_int lo, Z.to_int hi)
       | _ -> None
     with _ -> None)
   | _ -> None
@@ -72,13 +72,14 @@ let interval_hi_of_expr (idx_expr : Expr.t) (mem : AbsMemory.t) : int option =
 (* [iter_array_accesses target_f var_set s2_exit_mem f]
    CFG를 entry부터 순회하며 BinaryOp(Add) 명령어에서
    base 변수 + non-singleton interval 인덱스 패턴을 찾을 때마다
-   [f base_offset hi]를 호출한다.
+   [f base_offset lo hi]를 호출한다.
+   인덱스는 음수일 수 있다 (예: base = ebp, 인덱스 = i*4 - 48).
    detect_arrays / detect_loop_chunks의 공통 골격. *)
 let iter_array_accesses
     (target_f : Function.t)
     (var_set : var_set)
     (s2_exit_mem : AbsMemory.t)
-    (f : int -> int -> unit) : unit =
+    (f : int -> int -> int -> unit) : unit =
 
   let var_names = build_var_names var_set in
 
@@ -86,14 +87,14 @@ let iter_array_accesses
     match Hashtbl.find_opt var_names base_name with
     | None -> ()
     | Some base_addr_str ->
-      (match interval_hi_of_expr idx_expr s2_exit_mem with
-       | Some hi ->
+      (match interval_of_expr idx_expr s2_exit_mem with
+       | Some (lo, hi) ->
          let base_offset =
            match addr_to_offset base_addr_str with
            | Some o -> o
            | None -> 0
          in
-         f base_offset hi
+         f base_offset lo hi
        | None -> ())
   in
 
@@ -147,7 +148,7 @@ let merge_by
 
 (* [detect_loop_chunks target_f var_set s2_exit_mem]
    탐지 조건은 detect_arrays와 같지만, size 계산 없이
-   (base_offset, base_offset + hi) 범위 리스트만 반환한다.
+   (base_offset + lo, base_offset + hi) 범위 리스트만 반환한다.
    같은 (start, end) 쌍은 중복 없이 한 번만 기록된다. *)
 let detect_loop_chunks
     (target_f : Function.t)
@@ -156,8 +157,8 @@ let detect_loop_chunks
     : (int * int) list =
 
   let results = ref [] in
-  iter_array_accesses target_f var_set s2_exit_mem (fun base_offset hi ->
-    let chunk = (base_offset, base_offset + hi) in
+  iter_array_accesses target_f var_set s2_exit_mem (fun base_offset lo hi ->
+    let chunk = (base_offset + lo, base_offset + hi) in
     if not (List.mem chunk !results) then
       results := chunk :: !results
   );
@@ -249,7 +250,7 @@ let detect_unbounded_ptr_chunks
   !results
 
 (* [extend_loop_chunk_ends loop_chunks var_set other_chunks]
-   loop 기반 chunk는 인덱스 접근 범위(base ~ base+hi)까지만 근거가 있고,
+   loop 기반 chunk는 인덱스 접근 범위(base+lo ~ base+hi)까지만 근거가 있고,
    base+hi는 마지막 원소가 "시작"하는 offset이다. 원소 폭(타입)은 쓰지 않고,
    end를 그 위쪽에서 처음 나오는 offset(var_set 변수, 다른 chunk의 시작,
    없으면 0 = %arg_esp)의 바로 앞까지 늘린다.

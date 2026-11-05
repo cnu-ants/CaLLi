@@ -246,7 +246,7 @@ let _ =
 
   let var_set = AbsMemory.group_by_value_with_env filtered_mem reverse_env in 
 
-  (* loop 기반 덩어리: 인덱스 접근 범위(base ~ base+hi)까지 *)
+  (* loop 기반 덩어리: 인덱스 접근 범위(base+lo ~ base+hi)까지 *)
   let loop_chunks = StackShape.detect_loop_chunks target_f var_set s1_exit_mem in
 
   (* 넓은 접근 덩어리: 접근 폭이 변수 칸(4바이트)보다 큰 load/store (예: double = i64) *)
